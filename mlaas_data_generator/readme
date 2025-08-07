@@ -1,0 +1,15 @@
+# MLaaS Data Generator
+
+This package converts the original `MLaaS_Data_Generator.ipynb` notebook into a small
+Python package.  The goal is to provide a repeatable way to generate synthetic
+client records for experiments with Adaptive MLaaS.
+
+## Usage
+
+```bash
+python -m mlaas_data_generator.cli --clients 5 --output clients.csv #for review
+```
+
+The command downloads the Fashion-MNIST dataset, trains a small model for each
+client and writes the resulting metrics (including the binary utility scores)
+into `clients.csv`.

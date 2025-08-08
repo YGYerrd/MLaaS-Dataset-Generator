@@ -41,7 +41,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Import heavy modules lazily so that `--help` works without TensorFlow installed
     from .federated import FederatedDataGenerator
     import json
 

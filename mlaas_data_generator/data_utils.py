@@ -25,7 +25,6 @@ def load_dataset(name: str = "fashion_mnist"):
     x_test = np.expand_dims(x_test, -1)
     return (x_train, y_train), (x_test, y_test)
 
-
 def split_data(x, y, num_clients: int):
     """Split ``(x, y)`` equally among ``num_clients``."""
     data_per_client = len(x) // num_clients
@@ -36,6 +35,25 @@ def split_data(x, y, num_clients: int):
         clients[f"client_{i+1}"] = {
             "x": x[start:end],
             "y": y[start:end],
+        }
+    return clients
+
+
+def split_custom_data(x, y, client_distributions: dict):
+    """Split ``(x, y)`` according to ``client_distributions``."""
+    clients = {}
+    for client, distribution in client_distributions.items():
+        client_x, client_y = [], []
+        for label, count in distribution.items():
+            indices = np.where(y == label)[0]
+            if len(indices) == 0:
+                continue
+            chosen = np.random.choice(indices, size=min(count, len(indices)), replace=False)
+            client_x.extend(x[chosen])
+            client_y.extend(y[chosen])
+        clients[client] = {
+            "x": np.array(client_x),
+            "y": np.array(client_y),
         }
     return clients
 

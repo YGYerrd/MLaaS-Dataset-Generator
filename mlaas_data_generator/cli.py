@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from .config import CONFIG
+from .data_utils import prepare_client_distributions
 
 
 def main() -> None:
@@ -50,7 +51,8 @@ def main() -> None:
     client_distributions = None
     if args.distribution:
         with open(args.distribution, "r") as f:
-            client_distributions = json.load(f)
+            custom_distributions = json.load(f)
+            client_distributions = prepare_client_distributions(custom_distributions, config["num_clients"])
 
     generator = FederatedDataGenerator(config, dataset=args.dataset, client_distributions=client_distributions)
     df = generator.run()

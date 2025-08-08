@@ -42,6 +42,12 @@ class FederatedDataGenerator:
         else:
             clients = split_data(self.x_train, self.y_train, self.config["num_clients"])
 
+        print("Client data distributions before training:")
+        client_data_distributions = {}
+        for client_id, data in clients.items():
+            distribution = get_data_distribution(data["y"], self.num_classes)
+            client_data_distributions[client_id] = distribution
+            print(f"{client_id}: {distribution}")
 
         global_model = create_model(
             self.input_shape,
@@ -80,7 +86,13 @@ class FederatedDataGenerator:
                     json.dump({k: v.tolist() for k, v in weights.items()}, f, indent=4)
 
                 accuracy = evaluate_model(local_model, self.x_test, self.y_test)
-                distribution = get_data_distribution(data["y"], self.num_classes)
+                distribution = client_data_distributions[client_id]
+
+                actual_distribution = get_data_distribution(data["y"], self.num_classes)
+                expected_distribution = client_data_distributions.get(client_id)
+
+                if actual_distribution != expected_distribution:
+                    print(f"Warning: Mismatch for {client_id}")
 
                 records.append(
                     {
@@ -107,5 +119,7 @@ class FederatedDataGenerator:
             )
         )
         df = df.merge(mean_acc, on="Client")
+        print("Federated Learning Process Complete!\n")
+       
         metrics_df = compute_binary_vector(df)
         return pd.concat([df, metrics_df], axis=1)

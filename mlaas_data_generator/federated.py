@@ -7,6 +7,7 @@ import time
 from typing import Dict, Optional
 import pandas as pd
 import numpy as np
+from sklearn.utils import shuffle
 
 
 from .config import CONFIG
@@ -31,6 +32,9 @@ class FederatedDataGenerator:
         self.client_distributions = client_distributions
 
         (self.x_train, self.y_train), (self.x_test, self.y_test) = load_dataset(dataset)
+        
+        self.x_train, self.y_train = shuffle(self.x_train,  self.y_train, random_state=42)
+        
         self.input_shape = self.x_train.shape[1:]
         self.num_classes = len(np.unique(self.y_train))
 
@@ -39,8 +43,10 @@ class FederatedDataGenerator:
 
         if self.client_distributions:
             clients = split_custom_data(self.x_train, self.y_train, self.client_distributions)
+            print("Using custom data")
         else:
             clients = split_data(self.x_train, self.y_train, self.config["num_clients"])
+            print("Using else")
 
         print("Client data distributions before training:")
         client_data_distributions = {}
@@ -57,6 +63,7 @@ class FederatedDataGenerator:
         )
         
         records = []
+        global_accuracies = []
 
         for round_num in range(CONFIG["num_rounds"]):
             print(f"--- Round {round_num + 1} ---")
@@ -107,10 +114,24 @@ class FederatedDataGenerator:
 
             print("Aggregating client weights...")
             new_global_weights = aggregate_weights(client_weights)
-            global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
+            global_model.set_weights(
+                [new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))]
+            )
+            global_accuracy = evaluate_model(
+                global_model, self.x_test, self.y_test
+            )
+            print(f"Global model accuracy: {global_accuracy}")
+            global_accuracies.append(
+                {"Round": round_num + 1, "Global_Accuracy": global_accuracy}
+            )
             with open(f"weights/global_round_{round_num+1}.json", "w") as f:
                 json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
+ 
+        with open("weights/global_accuracies.json", "w") as f:
+            json.dump(global_accuracies, f, indent=4)
 
+        self.global_accuracies = global_accuracies
+        
         df = pd.DataFrame(records)
 
         mean_acc = (

@@ -8,7 +8,6 @@ from tensorflow.keras.datasets import fashion_mnist, mnist
 
 def load_dataset(name: str = "fashion_mnist"):
     """Load a dataset by name.
-
     Parameters
     ----------
     name: str
@@ -23,6 +22,7 @@ def load_dataset(name: str = "fashion_mnist"):
     x_test = x_test.astype("float32") / 255.0
     x_train = np.expand_dims(x_train, -1)
     x_test = np.expand_dims(x_test, -1)
+
     return (x_train, y_train), (x_test, y_test)
 
 def split_data(x, y, num_clients: int):
@@ -46,24 +46,24 @@ def split_data(x, y, num_clients: int):
 def split_custom_data(x, y, client_distributions: dict):
     """Split ``(x, y)`` according to ``client_distributions``."""
     clients = {}
+    assigned_indices = set()
+    
     for client, distribution in client_distributions.items():
         client_x, client_y = [], []
         for label, count in distribution.items():
             label = int(label)
             indices = np.where(y == label)[0]
+            available_indices = list(set(indices) - assigned_indices)
             if len(indices) == 0:
                 continue
-            chosen = np.random.choice(indices, size=min(count, len(indices)), replace=False)
+            chosen = np.random.choice(available_indices, size=min(count, len(available_indices)), replace=False)
+            assigned_indices.update(chosen)
             client_x.extend(x[chosen])
             client_y.extend(y[chosen])
 
-        client_x = np.array(client_x)
-        client_y = np.array(client_y)
-        shuffle_idx = np.random.permutation(len(client_y))
-
         clients[client] = {
-            "x": client_x[shuffle_idx],
-            "y": client_y[shuffle_idx],
+            "x": np.array(client_x),
+            "y": np.array(client_y),
         }
     return clients
 

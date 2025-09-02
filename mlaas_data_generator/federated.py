@@ -4,16 +4,16 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Dict, Optional
+from typing import Dict
 import pandas as pd
 import numpy as np
 from sklearn.utils import shuffle
+import uuid
 
 
 from .config import CONFIG
 from .data_utils import load_dataset, split_data, split_custom_data, get_data_distribution
 from .model_utils import create_model, train_local_model, evaluate_model, aggregate_weights
-from .metrics import compute_binary_vector
 
 
 class FederatedDataGenerator:
@@ -23,13 +23,18 @@ class FederatedDataGenerator:
         self, 
         config: dict | None = None, 
         dataset: str = "fashion_mnist",
-        client_distributions: Dict[str, Dict[int, int]] = None
+        client_distributions: Dict[str, Dict[int, int]] = None,
+        task_type: str = "classification",
+        model_type: str = "CNN"
         ):
         self.config = CONFIG.copy()
         if config:
             self.config.update(config)
+        
         self.dataset = dataset
         self.client_distributions = client_distributions
+        self.task_type = task_type
+        self.model_type = model_type
 
         (self.x_train, self.y_train), (self.x_test, self.y_test) = load_dataset(dataset)
         
@@ -37,6 +42,7 @@ class FederatedDataGenerator:
         
         self.input_shape = self.x_train.shape[1:]
         self.num_classes = len(np.unique(self.y_train))
+
 
     def run(self) -> pd.DataFrame:
         os.makedirs("weights", exist_ok=True)
@@ -62,6 +68,11 @@ class FederatedDataGenerator:
             self.config["learning_rate"],
         )
         
+        run_id = str(uuid.uuid4())
+        dataset_name = self.dataset
+        task_type = self.task_type
+        model_type = self.model_type
+
         records = []
         global_accuracies = []
 
@@ -79,14 +90,43 @@ class FederatedDataGenerator:
                 )
                 local_model.set_weights(global_model.get_weights())
 
+                participated = True
+                round_fail_reason = ""
+
                 start = time.time()
-                weights = train_local_model(
-                    local_model,
-                    data["x"],
-                    data["y"],
-                    epochs=self.config["local_epochs"],
-                    batch_size=self.config["batch_size"],
-                )
+
+                try:
+                    weights = train_local_model(
+                        local_model,
+                        data["x"],
+                        data["y"],
+                        epochs=self.config["local_epochs"],
+                        batch_size=self.config["batch_size"],
+                    )
+                
+                except Exception as e:
+                    participated = False
+                    round_fail_reason = "error"
+                    duration = time.time() - start
+                    accuracy = np.nan
+                    distribution = client_data_distributions[client_id]
+
+                    records.append(
+                        {
+                            "run_id": run_id,
+                            "round": round_num + 1,
+                            "client_id": client_id,
+                            "dataset": dataset_name,
+                            "model_type": model_type,
+                            "participated": participated,
+                            "round_fail_reason": round_fail_reason,
+                            "data_Distribution": distribution,
+                            "Computation_Time": duration,
+                            "quality_Factor": accuracy,
+                        }
+                    )
+                    continue
+
                 duration = time.time() - start
 
                 with open(f"weights/{client_id}_round_{round_num+1}.json", "w") as f:
@@ -99,15 +139,21 @@ class FederatedDataGenerator:
                 expected_distribution = client_data_distributions.get(client_id)
 
                 if actual_distribution != expected_distribution:
-                    print(f"Warning: Mismatch for {client_id}")
+                    print(f"Warning: distribution mismatch for {client_id}")
 
                 records.append(
                     {
-                        "Client": client_id,
-                        "Round": round_num + 1,
+                        "run_id": run_id,
+                        "round": round_num + 1,
+                        "client_id": client_id,
+                        "dataset": dataset_name,
+                        "task_type": task_type,
+                        "model_type": model_type,
+                        "participated": participated,
+                        "round_fail_reason": round_fail_reason,
+                        "data_Distribution": distribution,
                         "Computation_Time": duration,
-                        "Quality_Factor": accuracy,
-                        "Data_Distribution": distribution,
+                        "quality_Factor": accuracy,
                     }
                 )
                 client_weights.append(weights)
@@ -135,12 +181,11 @@ class FederatedDataGenerator:
         df = pd.DataFrame(records)
 
         mean_acc = (
-            df.groupby("Client")["Quality_Factor"].mean().reset_index().rename(
-                columns={"Quality_Factor": "Reliability_Score"}
+            df.groupby("client_id")["quality_Factor"].mean().reset_index().rename(
+                columns={"quality_Factor": "reliability_Score"}
             )
         )
-        df = df.merge(mean_acc, on="Client")
+        df = df.merge(mean_acc, on="client_id")
         print("Federated Learning Process Complete!\n")
        
-        metrics_df = compute_binary_vector(df)
-        return pd.concat([df, metrics_df], axis=1)
+        return df

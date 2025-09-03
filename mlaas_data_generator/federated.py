@@ -12,7 +12,12 @@ import uuid
 
 
 from .config import CONFIG
-from .data_utils import load_dataset, split_data, split_custom_data, get_data_distribution
+from .data_utils import (
+    load_dataset,
+    split_data,
+    split_custom_data,
+    get_data_distribution,
+)
 from .model_utils import create_model, train_local_model, evaluate_model, aggregate_weights
 
 
@@ -47,12 +52,23 @@ class FederatedDataGenerator:
     def run(self) -> pd.DataFrame:
         os.makedirs("weights", exist_ok=True)
 
+        # Determine data split strategy
         if self.client_distributions:
             clients = split_custom_data(self.x_train, self.y_train, self.client_distributions)
-            print("Using custom data")
+            distribution_type = "custom"
+            distribution_param = None
+            print("Using custom client distributions")
         else:
-            clients = split_data(self.x_train, self.y_train, self.config["num_clients"])
-            print("Using else")
+            distribution_type = self.config.get("distribution_type", "iid")
+            distribution_param = self.config.get("distribution_param", None)
+            clients = split_data(
+                self.x_train,
+                self.y_train,
+                self.config["num_clients"],
+                strategy=distribution_type,
+                distribution_param=distribution_param,
+            )
+            print(f"Using split strategy: {distribution_type} | params: {distribution_param}")
 
         print("Client data distributions before training:")
         client_data_distributions = {}

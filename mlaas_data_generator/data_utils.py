@@ -25,22 +25,20 @@ def load_dataset(name: str = "fashion_mnist"):
 
     return (x_train, y_train), (x_test, y_test)
 
-def split_data(x, y, num_clients: int):
-    """Split ``(x, y)`` equally among ``num_clients``."""
-    indices = np.arange(len(x))
-    np.random.shuffle(indices)
-    x, y = x[indices], y[indices]
-
-    data_per_client = len(x) // num_clients
+def _build_clients_from_indices(x, y, indices_by_client: dict):
     clients = {}
-    for i in range(num_clients):
-        start = i * data_per_client
-        end = (i + 1) * data_per_client
-        clients[f"client_{i+1}"] = {
-            "x": x[start:end],
-            "y": y[start:end],
-        }
+    for cid, idx in indices_by_client.items():
+        clients[cid] = {"x": x[idx], "y": y[idx]}
     return clients
+
+def split_iid(x, y, num_clients: int):
+    n = len(x)
+    idx = np.random.permutation(n)
+    data_per_client = n // num_clients
+    indices_by_client = {
+        f"client_{i+1}" : idx[i*data_per_client: (i+1)*data_per_client] for i in range(num_clients)
+    }
+    return _build_clients_from_indices(x, y, indices_by_client)
 
 
 def split_custom_data(x, y, client_distributions: dict):

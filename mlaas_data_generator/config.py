@@ -19,4 +19,8 @@ CONFIG = {
     "batch_size": 32,
     "learning_rate": 0.01,
     "reduced_neurons": 64,
+    "distribution_type": "iid",
+    "distribution_param": None,
+    "sample_size": 30000,
+    "sample_frac": 0.5
 }

@@ -15,7 +15,6 @@ from .config import CONFIG
 from .data_utils import (
     load_dataset,
     split_data,
-    split_custom_data,
     get_data_distribution,
 )
 from .model_utils import create_model, train_local_model, evaluate_model, aggregate_weights
@@ -27,8 +26,7 @@ class FederatedDataGenerator:
     def __init__(
         self, 
         config: dict | None = None, 
-        dataset: str = "fashion_mnist",
-        client_distributions: Dict[str, Dict[int, int]] = None,
+        dataset: str = "mnist",
         task_type: str = "classification",
         model_type: str = "CNN"
         ):
@@ -37,7 +35,6 @@ class FederatedDataGenerator:
             self.config.update(config)
         
         self.dataset = dataset
-        self.client_distributions = client_distributions
         self.task_type = task_type
         self.model_type = model_type
 
@@ -52,23 +49,32 @@ class FederatedDataGenerator:
     def run(self) -> pd.DataFrame:
         os.makedirs("weights", exist_ok=True)
 
-        # Determine data split strategy
-        if self.client_distributions:
-            clients = split_custom_data(self.x_train, self.y_train, self.client_distributions)
-            distribution_type = "custom"
-            distribution_param = None
-            print("Using custom client distributions")
-        else:
-            distribution_type = self.config.get("distribution_type", "iid")
-            distribution_param = self.config.get("distribution_param", None)
-            clients = split_data(
-                self.x_train,
-                self.y_train,
-                self.config["num_clients"],
-                strategy=distribution_type,
-                distribution_param=distribution_param,
-            )
-            print(f"Using split strategy: {distribution_type} | params: {distribution_param}")
+        sample_size = self.config.get("sample_size")
+        sample_frac = self.config.get("sample_frac") 
+        distribution_type = self.config.get("distribution_type", "iid")
+        distribution_param = self.config.get("distribution_param", None)
+        custom_distributions = self.config.get("custom_distributions", None)
+
+        clients, split_info = split_data(
+            self.x_train,
+            self.y_train,
+            self.config["num_clients"],
+            strategy=distribution_type,
+            distribution_param=distribution_param,
+            custom_distributions=custom_distributions,
+            sample_size=sample_size,
+            sample_frac=sample_frac
+        )
+        distribution_type = split_info["strategy"]
+        distribution_param = split_info["distribution_param"]
+        
+        run_id = str(uuid.uuid4())
+        dataset_name = self.dataset
+        task_type = self.task_type
+        model_type = self.model_type
+
+        print(f"\nUsing split strategy: {distribution_type} | params: {distribution_param}\n")
+        print(f"Using Dataset:{dataset_name}\n")
 
         print("Client data distributions before training:")
         client_data_distributions = {}
@@ -83,16 +89,11 @@ class FederatedDataGenerator:
             self.config["reduced_neurons"],
             self.config["learning_rate"],
         )
-        
-        run_id = str(uuid.uuid4())
-        dataset_name = self.dataset
-        task_type = self.task_type
-        model_type = self.model_type
 
         records = []
         global_accuracies = []
 
-        for round_num in range(CONFIG["num_rounds"]):
+        for round_num in range(self.config["num_rounds"]):
             print(f"--- Round {round_num + 1} ---")
 
             client_weights = []
@@ -134,10 +135,14 @@ class FederatedDataGenerator:
                             "round": round_num + 1,
                             "client_id": client_id,
                             "dataset": dataset_name,
+                            "task_type": task_type,
                             "model_type": model_type,
                             "participated": participated,
                             "round_fail_reason": round_fail_reason,
+                            "distribution_type": distribution_type,
+                            "distribution_param": distribution_param,
                             "data_Distribution": distribution,
+                            "samples_count": samples_count,
                             "Computation_Time": duration,
                             "quality_Factor": accuracy,
                         }

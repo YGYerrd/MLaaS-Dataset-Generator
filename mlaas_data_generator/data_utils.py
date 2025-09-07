@@ -151,7 +151,7 @@ def split_custom_data(x, y, client_distributions: dict, rng=None):
     pool_by_label = {}
     for lbl in range(num_classes):
         idxs = np.where(y == lbl)[0]
-        g.shuffle(idxs)
+        seed.shuffle(idxs)
         pool_by_label[lbl] = idxs
 
     # Allocate indices to clients based on requested counts
@@ -189,52 +189,50 @@ def _shrink_dataset(x, y, sample_size=None, sample_frac=None, rng=None):
 
 def split_data(x, y, num_clients, strategy = "iid", distribution_param = None, custom_distributions=None, sample_size=None, sample_frac=None, rng=None):
     strategy = strategy.lower()
-    
     if sample_size or sample_frac:
         x,y = _shrink_dataset(x=x, y=y, sample_frac=sample_frac, sample_size=sample_size, rng=rng)
     
+    resolved = {"strategy": strategy, "distribution_param": None}
+
     if num_clients <= 0:
         raise ValueError("num_clients must be positive.")
 
     if strategy == "iid":
-        return split_iid(x, y, num_clients, rng=rng)
+        return split_iid(x, y, num_clients, rng=rng), resolved
 
     if strategy == "quantity_skew":
         alpha = float(distribution_param) if distribution_param is not None else 1.0
         if alpha <= 0:
             raise ValueError("alpha must be > 0 for quantity_skew.")
-        return split_quantity_skew(x, y, num_clients, alpha, rng=rng)
+        resolved["distribution_param"] = alpha
+        return split_quantity_skew(x, y, num_clients, alpha, rng=rng), resolved
 
     if strategy == "dirichlet":
         alpha = float(distribution_param) if distribution_param is not None else 0.5
         if alpha <= 0:
             raise ValueError("alpha must be > 0 for dirichlet.")
-        return split_dirichlet_label_skew(x, y, num_clients, alpha, rng=rng)
+        resolved["distribution_param"] = alpha
+        return split_dirichlet_label_skew(x, y, num_clients, alpha, rng=rng), resolved
 
     if strategy == "shard":
         shards_per_client = int(distribution_param) if distribution_param is not None else 2
         if shards_per_client <= 0:
             raise ValueError("shards_per_client must be > 0 for shard.")
-        return split_shard_based(x, y, num_clients, shards_per_client, rng=rng)
+        resolved["distribution_param"] = shards_per_client
+        return split_shard_based(x, y, num_clients, shards_per_client, rng=rng), resolved
 
     if strategy == "label_per_client":
         k = int(distribution_param) if distribution_param is not None else 1
         if not (1 <= k <= int(np.max(y)) + 1):
             raise ValueError("k must be in [1, num_classes] for label_per_client.")
-        return split_label_per_client(x, y, num_clients, k, rng=rng)
+        resolved["distribution_param"] = k
+        return split_label_per_client(x, y, num_clients, k, rng=rng), resolved
 
     if strategy == "custom":
-        if custom_distributions is None or len(custom_distributions) == 0:
-            raise ValueError("client_distributions must be provided for 'custom' strategy.")
-        
-        if len(custom_distributions) != num_clients:
-            raise ValueError(
-                f"client_distributions specifies {len(custom_distributions)} clients, "
-                f"but num_clients={num_clients} was requested. "
-                "These must match exactly."
-            )
-
-        return split_custom_data(x, y, custom_distributions, rng=rng)
+        if not custom_distributions:
+                raise ValueError("custom_distributions must be provided for 'custom' strategy.'")
+        adjusted = prepare_client_distributions(custom_distributions, num_clients)
+        return split_custom_data(x, y, adjusted, rng=rng), resolved
 
     raise ValueError(f"Unknown data split strategy: {strategy}")
 

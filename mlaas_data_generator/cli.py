@@ -33,10 +33,25 @@ def add_generate_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Dataset to use"
     )
     p.add_argument(
-        "--distribution",type=str,
-        default=None,
-        help="Path to JSON file with custom client data distribution"
+        "--strategy", type=str, default="iid",
+        choices=["iid", "quantity_skew", "dirichlet", "shard", "label_per_client", "custom"],
+        help="Data splitting strategy",
     )
+    p.add_argument(
+        "--distribution-param", type=float, default=None,
+        help="Parameter for the chosen data split strategy",
+    )
+    p.add_argument(
+        "--sample-size", type=int, default=None,
+        help="Number of samples to draw from the dataset before splitting",
+    )
+    p.add_argument(
+        "--sample-frac", type=float, default=None,
+        help="Fraction of the dataset to use before splitting",
+    )
+    p.add_argument("--distribution", type=str, default=None,
+                help="Path to JSON defining per-client label counts (only used with --strategy custom)")
+    
     p.set_defaults(_cmd="generate")
 
     
@@ -94,14 +109,20 @@ def main() -> None:
 
         config = CONFIG.copy()
         config["num_clients"] = args.clients
-        
-        client_distributions = None
-        if args.distribution:
+        config["distribution_type"] = args.strategy
+        config["distribution_param"] = args.distribution_param
+        if args.sample_size is not None:
+            config["sample_size"] = args.sample_size
+        if args.sample_frac is not None:
+            config["sample_frac"] = args.sample_frac
+
+        if args.strategy == "custom":
+            if not args.distribution:
+                raise SystemExit("--distribution is required when --strategy custom")
             with open(args.distribution, "r") as f:
                 custom_distributions = json.load(f)
-                client_distributions = prepare_client_distributions(custom_distributions, config["num_clients"])
-
-        generator = FederatedDataGenerator(config, dataset=args.dataset, client_distributions=client_distributions)
+                config["custom_distributions"] = custom_distributions
+        generator = FederatedDataGenerator(config, dataset=args.dataset)
         df = generator.run()
         out_path = resolve_output_path(args.output, kind="run")
         df.to_csv(out_path, index=False)

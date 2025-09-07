@@ -11,21 +11,78 @@ weights for each client and the aggregated global weights are written to a
 Multiple round metrics can be combined into one dataframe for further evaluation
 
 ## Usage
+### Subcommands
+generate — run the federated loop and write a per-round, per-client CSV.
+merge — combine multiple CSVs into a single file with optional de-duplication and a sequential ID.
 
+### Flags
+--clients INT — number of clients.
+
+--dataset {fashion_mnist,mnist} — dataset to use.
+
+--output PATH — output CSV filename (written under outputs/runs/).
+
+--strategy {iid,quantity_skew,dirichlet,shard,label_per_client,custom}
+
+--distribution-param FLOAT — meaning depends on strategy (see below).
+iid: ignored.
+quantity_skew: Dirichlet α over client sizes (higher α → more even).
+dirichlet: Dirichlet α over labels per client (higher α → more even).
+shard: shards_per_client (int). Data sorted by label, split into shards, randomly assigned.
+label_per_client: k labels per client (int, 1…#classes).
+custom: ignored; use --distribution JSON. (Auto-extend/shrink to match --clients happens inside the splitter.)
+
+--distribution PATH.json — only for --strategy custom; points to per-client label counts.
+
+Optional dataset downsampling before splitting:
+--sample-size INT or --sample-frac FLOAT (use one).
+
+
+### Run Examples
+Minimal Run (IID)
 ```bash
-# Default
-python -m mlaas_data_generator.cli --clients 5 --dataset fashion_mnist --distribution custom_distributions.json --output clients.csv
+python -m mlaas_data_generator.cli generate --clients 5 --dataset fashion_mnist --strategy iid --output clients.csv
+```
 
-# Explicit call
-python -m mlaas_data_generator.cli generate \
-  --clients 5 \
-  --dataset fashion_mnist \
-  --distribution custom.json \
-  --output clients.csv
+Quantity Skew 
+```bash
+python -m mlaas_data_generator.cli generate --clients 5 --strategy quantity_skew --distribution-param 0.3 --output qskew.csv
+```
+
+Dirichlet Label Skew
+```bash
+python -m mlaas_data_generator.cli generate --clients 10 --strategy dirichlet --distribution-param 0.2 --output dirichlet.csv
+```
+
+Loose Shard-based partitioning
+```bash
+python -m mlaas_data_generator.cli generate --clients 5 --strategy shard --distribution-param 2 --output shard.csv
+```
+
+K labels per client
+```bash
+python -m mlaas_data_generator.cli generate --clients 5 --strategy label_per_client --distribution-param 2 --output klabels.csv
+```
+
+Custom distributions (JSON file)
+```bash
+python -m mlaas_data_generator.cli generate --clients 5 --strategy custom --distribution custom_distributions.json --output custom.csv
+
+```
+
+Downsampling before splitting
+```bash
+# Use 30k samples
+python -m mlaas_data_generator.cli generate --sample-size 30000 ...
+
+# Use 50% of the dataset
+python -m mlaas_data_generator.cli generate --sample-frac 0.5 ...
+```
+
 
 # Merge explicit files 
 python -m mlaas_data_generator.cli merge  outputs/runs/clients.csv outputs/runs/FMNIST_clients.csv --output merged.csv --dedupe
-    # Or global
+    # Or globs
 python -m mlaas_data_generator.cli merge ""outputs/runs/*.csv" --output merged.csv
 
 ```

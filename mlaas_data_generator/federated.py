@@ -120,12 +120,13 @@ class FederatedDataGenerator:
                         batch_size=self.config["batch_size"],
                     )
                 
-                except Exception as e:
+                except Exception:
                     participated = False
                     round_fail_reason = "error"
                     duration = time.time() - start
                     accuracy = np.nan
                     distribution = client_data_distributions[client_id]
+                    samples_count = len(data["y"])
 
                     records.append(
                         {
@@ -150,6 +151,7 @@ class FederatedDataGenerator:
 
                 accuracy = evaluate_model(local_model, self.x_test, self.y_test)
                 distribution = client_data_distributions[client_id]
+                samples_count = len(data["y"])
 
                 actual_distribution = get_data_distribution(data["y"], self.num_classes)
                 expected_distribution = client_data_distributions.get(client_id)
@@ -167,7 +169,10 @@ class FederatedDataGenerator:
                         "model_type": model_type,
                         "participated": participated,
                         "round_fail_reason": round_fail_reason,
+                        "distribution_type": distribution_type,
+                        "distribution_param": distribution_param,
                         "data_Distribution": distribution,
+                        "samples_count": samples_count,
                         "Computation_Time": duration,
                         "quality_Factor": accuracy,
                     }

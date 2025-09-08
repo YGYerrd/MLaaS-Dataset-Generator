@@ -4,3 +4,4 @@ weights/
 clients.csv
 mlaas_data_generator/config.py
 outputs/
+run_config.json/

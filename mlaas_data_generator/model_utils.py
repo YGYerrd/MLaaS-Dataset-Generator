@@ -3,18 +3,37 @@
 from __future__ import annotations
 
 import numpy as np
-from tensorflow.keras import layers, models, optimizers
+from tensorflow.keras import layers, models, optimizers, regularizers
+from sklearn.metrics import f1_score
 
+def _make_optimizer(name, lr):
+    name = name.lower()
+    if name == "sgd":     return optimizers.SGD(learning_rate=lr, momentum=0.0)
+    if name == "rmsprop": return optimizers.RMSprop(learning_rate=lr)
+    if name == "adagrad": return optimizers.Adagrad(learning_rate=lr)
+    if name == "adamw":   return optimizers.AdamW(learning_rate=lr)
+    return optimizers.Adam(learning_rate=lr)
 
-def create_model(input_shape, num_classes, reduced_neurons: int = 64, learning_rate: float = 0.01):
-    model = models.Sequential([
-        layers.Conv2D(64, (3, 3), activation="relu", input_shape=input_shape),
-        layers.MaxPooling2D((2, 2)),
-        layers.Flatten(),
-        layers.Dense(reduced_neurons, activation="relu"),
-        layers.Dense(num_classes, activation="softmax"),
-    ])
-    opt = optimizers.SGD(learning_rate=learning_rate)
+def create_model(input_shape, num_classes, hidden_layers=64, learning_rate=0.01, activation="relu", dropout=0.0, weight_decay=0.0, optimizer="adam"):
+    l2 = regularizers.l2(weight_decay) if weight_decay > 0 else None
+    
+    model = models.Sequential(name="mlaas_cnn")
+
+    model.add(layers.Input(shape=input_shape))
+    model.add(layers.Conv2D(32, 3, padding="same", activation="relu", kernel_regularizer=l2))
+    model.add(layers.MaxPooling2D())
+    model.add(layers.Conv2D(64, 3, padding="same", activation="relu", kernel_regularizer=l2))
+    model.add(layers.MaxPooling2D())
+    model.add(layers.Flatten())
+
+    for units in hidden_layers:
+        model.add(layers.Dense(units, activation=activation, kernel_regularizer=l2))
+        if dropout > 0:
+            model.add(layers.Dropout(dropout))
+
+    model.add(layers.Dense(num_classes, activation="softmax", kernel_regularizer=l2))
+
+    opt = _make_optimizer(optimizer, learning_rate)
     model.compile(optimizer=opt, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
     return model
 
@@ -40,4 +59,7 @@ def get_data_distribution(y):
 
 def evaluate_model(model, x_test, y_test):
     loss, acc = model.evaluate(x_test, y_test, verbose=0)
-    return acc
+    y_pred = model.predict(x_test, verbose=0)
+    y_pred_classes = y_pred.argmax(axis=1)
+    f1 = f1_score(y_test, y_pred_classes, average="macro")
+    return loss, acc, f1

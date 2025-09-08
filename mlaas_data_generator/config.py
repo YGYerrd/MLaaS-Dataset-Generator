@@ -18,9 +18,14 @@ CONFIG = {
     "local_epochs": 5,
     "batch_size": 32,
     "learning_rate": 0.01,
-    "reduced_neurons": 64,
+    "hidden_layers": [16, 32, 64, 128],
+    "activation": "relu",
+    "dropout": 0.0,
+    "weight_decay": 0.0,
+    "optimizer": "adam",
     "distribution_type": "iid",
     "distribution_param": None,
     "sample_size": 30000,
-    "sample_frac": 0.5
+    "sample_frac": 0.5,
+    "client_dropout_rate": 0.0
 }

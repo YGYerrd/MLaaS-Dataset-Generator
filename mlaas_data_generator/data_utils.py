@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.random import default_rng, Generator
 
-from tensorflow.keras.datasets import fashion_mnist, mnist
+from keras.datasets import fashion_mnist, mnist
 
 
 def load_dataset(name: str = "fashion_mnist"):

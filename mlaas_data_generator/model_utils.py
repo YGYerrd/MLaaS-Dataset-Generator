@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from tensorflow.keras import layers, models, optimizers, regularizers
+from keras import layers, models, optimizers, regularizers
 from sklearn.metrics import f1_score
 
 def _make_optimizer(name, lr):

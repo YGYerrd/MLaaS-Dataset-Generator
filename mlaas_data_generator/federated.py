@@ -35,18 +35,17 @@ class FederatedDataGenerator:
             self.config.update(config)
         
         self.dataset = dataset
-        self.task_type = task_type
         self.model_type = model_type
 
         seed = self.config.get("seed", 42)
         self.rng = np.random.default_rng(seed)
-
-        (self.x_train, self.y_train), (self.x_test, self.y_test) = load_dataset(dataset)
-        
-        self.x_train, self.y_train = shuffle(self.x_train,  self.y_train, random_state=seed)
-        
-        self.input_shape = self.x_train.shape[1:]
-        self.num_classes = len(np.unique(self.y_train))
+ 
+        (train, test, meta) = load_dataset(dataset)
+        (self.x_train, self.y_train), (self.x_test, self.y_test) = train, test
+        self.meta = meta 
+        self.input_shape = tuple(meta["input_shape"])
+        self.num_classes = meta.get("num_classes")
+        self.task_type = meta["task_type"]
         self.save_weights = bool(self.config.get("save_weights", True))
 
         self.knobs = {
@@ -164,6 +163,7 @@ class FederatedDataGenerator:
                 dropout=self.knobs["dropout"],
                 weight_decay=self.knobs["weight_decay"],
                 optimizer=self.knobs["optimizer"],
+                task_type=self.task_type
             )
     
     def _build_run_meta(self, global_model, split_meta):
@@ -255,7 +255,7 @@ class FederatedDataGenerator:
     distribution, samples_count, duration, loss, acc, f1,
     rounds_so_far, comm_down, comm_up
     ):
-        # single source of truth for CSV rows (old + new fields)
+        # single source of truth for CSV rows
         return {
             **run_meta,
             "round": round_idx,

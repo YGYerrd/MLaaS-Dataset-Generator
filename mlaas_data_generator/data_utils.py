@@ -2,31 +2,152 @@
 
 from __future__ import annotations
 
-import numpy as np
+import importlib, numpy as np
 from numpy.random import default_rng, Generator
+from sklearn.model_selection import train_test_split
 
-from keras.datasets import fashion_mnist, mnist
+KERAS_DATASETS = {
+    "mnist": "tensorflow.keras.datasets.mnist.load_data",
+    "fashion_mnist": "tensorflow.keras.datasets.fashion_mnist.load_data",
+    "cifar10": "tensorflow.keras.datasets.cifar10.load_data",
+    "california_housing": "tensorflow.keras.datasets.california_housing.load_data"
+}
 
+SKLEARN_DATASETS = {
+    "iris": "sklearn.datasets.load_iris",
+    "wine": "sklearn.datasets.load_wine",
+    "digits": "sklearn.datasets.load_digits",
+}
 
-def load_dataset(name: str = "fashion_mnist"):
-    """Load a dataset by name.
-    Parameters
-    ----------
-    name: str
-        Either ``"fashion_mnist"`` or ``"mnist"``.
-    """
-    if name == "mnist":
-        (x_train, y_train), (x_test, y_test) = mnist.load_data()
+def _import(path):
+    mod, attr = path.rsplit(".", 1)
+    return getattr(importlib.import_module(mod), attr)
+
+def _apply_scaler(x_train, x_test, scaler):
+    if not scaler:
+        return x_train.astype("float32"), x_test.astype("float32"), None
+    if scaler == "standard":
+        from sklearn.preprocessing import StandardScaler as S
+    elif scaler == "minmax":
+        from sklearn.preprocessing import MinMaxScaler as S
     else:
-        (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
+        raise ValueError(f"Unknown scaler: {scaler}")
+    s = S()
+    x_train = s.fit_transform(x_train).astype("float32")
+    x_test  = s.transform(x_test).astype("float32")
+    return x_train, x_test, scaler
 
-    x_train = x_train.astype("float32") / 255.0
-    x_test = x_test.astype("float32") / 255.0
-    x_train = np.expand_dims(x_train, -1)
-    x_test = np.expand_dims(x_test, -1)
+def _meta(task, input_shape, num_classes=None, feature_names=None, scaler=None):
+    return {
+        "task_type": task,
+        "input_shape": tuple(input_shape),
+        "num_classes": None if num_classes is None else num_classes,
+        "feature_names": feature_names,
+        "scaler": scaler,
+    }
 
-    return (x_train, y_train), (x_test, y_test)
+def _load_keras(name: str, **kwargs):
+    loader = _import(KERAS_DATASETS[name])
 
+    if name in {"mnist", "fashion_mnist", "cifar10"}:
+        (x_train, y_train), (x_test, y_test) = loader()
+        y_train = y_train.squeeze().astype(int)
+        y_test = y_test.squeeze().astype(int)
+        x_train = x_train.astype("float32") / 255.0
+        x_test = x_test.astype("float32") / 255.0
+        if x_train.ndim == 3:  # grayscale to (H,W,1)
+            x_train = x_train[..., None]
+            x_test = x_test[..., None]
+        meta = _meta("classification", x_train.shape[1:], num_classes=int(np.max(y_train) + 1))
+        return (x_train, y_train), (x_test, y_test), meta
+    
+    elif name == "california_housing":
+        version   = kwargs.get("version", "large")
+        path      = kwargs.get("path", "california_housing.npz")
+        test_split= float(kwargs.get("test_split", 0.2))
+        seed      = int(kwargs.get("seed", 113))
+        (x_train, y_train), (x_test, y_test) = loader(version=version, path=path, test_split=test_split, seed=seed)
+        meta = _meta("regression", (x_train.shape[1],), num_classes=None, feature_names=None, scaler=None)
+        return (x_train.astype("float32"), y_train.astype("float32")), (x_test.astype("float32"), y_test.astype("float32")), meta
+    
+    raise KeyError(name)
+
+def _load_sklearn(name: str, test_size=0.2, seed=42, scaler="standard"):
+    loader = _import(SKLEARN_DATASETS[name])
+    bunch = loader()
+    X = bunch.data.astype("float32")
+    y = bunch.target.astype(int)
+    stratify = y  # for stable class ratios
+    x_train, x_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=seed, stratify=stratify
+    )
+    x_train, x_test, scaler_used = _apply_scaler(x_train, x_test, scaler)
+    meta = _meta(
+        "clustering",
+        (x_train.shape[1],),
+        num_classes=int(np.unique(y).size),
+        feature_names=getattr(bunch, "feature_names", None),
+        scaler=scaler_used,
+    )
+    return (x_train, y_train), (x_test, y_test), meta
+
+
+def _load_csv(csv_path: str, target: str, task: str = "regression",
+              test_size=0.2, seed=42, scaler="standard"):
+    import pandas as pd
+    df = pd.read_csv(csv_path)
+    if target not in df.columns:
+        raise ValueError(f"Target '{target}' not in CSV columns: {list(df.columns)}")
+    y = df[target].to_numpy(dtype="float32" if task == "regression" else "int32")
+    X = df.drop(columns=[target]).to_numpy(dtype="float32")
+    stratify = None if task == "regression" else y
+    x_train, x_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=seed, stratify=stratify
+    )
+    x_train, x_test, scaler_used = _apply_scaler(x_train, x_test, scaler if task == "regression" else None)
+    meta = _meta(
+        task,
+        (x_train.shape[1],),
+        num_classes=None if task == "regression" else int(np.max(y) + 1),
+        feature_names=list(df.drop(columns=[target]).columns),
+        scaler=scaler_used,
+    )
+    return (x_train, y_train), (x_test, y_test), meta
+
+
+def load_dataset(name: str, **kwargs):
+    """
+    Families:
+      A) keras: mnist, fashion_mnist, cifar10, california_housing
+      B) sklearn: iris, wine, digits
+      C) csv:   pass csv_path=..., target=..., task=('regression'|'classification')
+    """
+    key = name.lower()
+
+    if key in KERAS_DATASETS:
+        return _load_keras(key, **kwargs)
+
+    if key in SKLEARN_DATASETS:
+        return _load_sklearn(
+            key,
+            test_size=kwargs.get("test_size", 0.2),
+            seed=kwargs.get("seed", 42),
+            scaler=kwargs.get("scaler", "standard"),
+        )
+
+    if key == "csv":
+        return _load_csv(
+            csv_path=kwargs["csv_path"],
+            target=kwargs["target"],
+            task=kwargs.get("task", "regression"),
+            test_size=kwargs.get("test_size", 0.2),
+            seed=kwargs.get("seed", 42),
+            scaler=kwargs.get("scaler", "standard"),
+        )
+
+    raise KeyError(
+        f"Unknown dataset '{name}'. Choices: {list(KERAS_DATASETS) + list(SKLEARN_DATASETS) + ['csv']}"
+    )
 
 
 def _build_clients_from_indices(x, y, indices_by_client: dict):

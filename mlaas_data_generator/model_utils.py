@@ -14,27 +14,47 @@ def _make_optimizer(name, lr):
     if name == "adamw":   return optimizers.AdamW(learning_rate=lr)
     return optimizers.Adam(learning_rate=lr)
 
-def create_model(input_shape, num_classes, hidden_layers=64, learning_rate=0.01, activation="relu", dropout=0.0, weight_decay=0.0, optimizer="adam"):
+def create_model(input_shape, num_classes, hidden_layers=64, learning_rate=0.01, activation="relu", dropout=0.0, weight_decay=0.0, optimizer="adam", task_type="classification"):
     l2 = regularizers.l2(weight_decay) if weight_decay > 0 else None
+    rank = len(input_shape)
+
+    is_regression = (task_type == "regression")
+    out_units = 1 if is_regression else int(num_classes)
+    out_activation = "linear" if is_regression else "softmax"
+    loss = "mse" if is_regression else "sparse_categorical_crossentropy"
+    metrics = ["mse"] if is_regression else ["accuracy"]
     
-    model = models.Sequential(name="mlaas_cnn")
 
-    model.add(layers.Input(shape=input_shape))
-    model.add(layers.Conv2D(32, 3, padding="same", activation="relu", kernel_regularizer=l2))
-    model.add(layers.MaxPooling2D())
-    model.add(layers.Conv2D(64, 3, padding="same", activation="relu", kernel_regularizer=l2))
-    model.add(layers.MaxPooling2D())
-    model.add(layers.Flatten())
+    if rank == 3:
+        model = models.Sequential(name="mlaas_cnn")
+        model.add(layers.Input(shape=input_shape))
+        model.add(layers.Conv2D(32, 3, padding="same", activation="relu", kernel_regularizer=l2))
+        model.add(layers.MaxPooling2D())
+        model.add(layers.Conv2D(64, 3, padding="same", activation="relu", kernel_regularizer=l2))
+        model.add(layers.MaxPooling2D())
+        model.add(layers.Flatten())
 
-    for units in hidden_layers:
-        model.add(layers.Dense(units, activation=activation, kernel_regularizer=l2))
-        if dropout > 0:
-            model.add(layers.Dropout(dropout))
+        for units in hidden_layers:
+            model.add(layers.Dense(units, activation=activation, kernel_regularizer=l2))
+            if dropout > 0:
+                model.add(layers.Dropout(dropout))
 
-    model.add(layers.Dense(num_classes, activation="softmax", kernel_regularizer=l2))
+        model.add(layers.Dense(num_classes, activation="softmax", kernel_regularizer=l2))
+    
+    elif rank == 1:
+        model = models.Sequential(name="mlaas_mlp")
+        model.add(layers.Input(shape=input_shape))
+        for units in hidden_layers:
+            model.add(layers.Dense(units, activation=activation, kernel_regularizer=l2))
+            if dropout and dropout > 0:
+                model.add(layers.Dropout(dropout))
+        model.add(layers.Dense(out_units, activation=out_activation, kernel_regularizer=l2))
+
+    else:
+        raise ValueError(f"Unsupported input_shape {input_shape}; rank {rank} not handled.")
 
     opt = _make_optimizer(optimizer, learning_rate)
-    model.compile(optimizer=opt, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    model.compile(optimizer=opt, loss=loss, metrics=metrics)
     return model
 
 
@@ -57,9 +77,11 @@ def get_data_distribution(y):
         distribution[label] += 1
     return distribution
 
-def evaluate_model(model, x_test, y_test):
-    loss, acc = model.evaluate(x_test, y_test, verbose=0)
+def evaluate_model(model, x_test, y_test, task_type="classification"):
+    loss, metric = model.evaluate(x_test, y_test, verbose=0)
+    if task_type == "regression":
+        return 1.0 / (1.0 + metric )
     y_pred = model.predict(x_test, verbose=0)
     y_pred_classes = y_pred.argmax(axis=1)
     f1 = f1_score(y_test, y_pred_classes, average="macro")
-    return loss, acc, f1
+    return loss, metric, f1

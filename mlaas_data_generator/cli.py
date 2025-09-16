@@ -39,12 +39,12 @@ def add_generate_subparser(subparsers):
     )
     p.add_argument(
         "--model-type", type=str, default=None,
-        choices=["CNN","MLP","LogReg","ResNet","Custom"],  # whatever you support
+        choices=["CNN","MLP","LogReg","ResNet","Custom"], 
         help="Model family recorded in run metadata (and used by create_model if applicable)"
     )
     p.add_argument(
         "--task-type", type=str, default=None,
-        choices=["classification","regression"],  # extend as needed
+        choices=["classification","regression"],
         help="Task type metadata"
     )
     p.add_argument(

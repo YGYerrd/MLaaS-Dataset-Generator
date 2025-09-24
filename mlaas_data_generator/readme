@@ -39,6 +39,11 @@ Optional dataset downsampling before splitting:
 
 
 ### Run Examples
+Wizard Usage
+```
+python -m mlaas_data_generator.cli wizard
+```
+
 Minimal Run (IID)
 ```bash
 python -m mlaas_data_generator.cli generate --clients 5 --dataset fashion_mnist --strategy iid --output clients.csv

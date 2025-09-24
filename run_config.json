@@ -1,25 +1,31 @@
 {
-  "dataset": "mnist",
-  "num_clients": 20,
-  "num_rounds": 5,
-  "local_epochs": 3,
-  "batch_size": 32,
+  "num_clients": 10,
+  "num_rounds": 20,
+  "local_epochs": 5,
+  "batch_size": 64,
   "learning_rate": 0.001,
   "hidden_layers": [
-    64,
-    32
+    128
   ],
   "activation": "relu",
   "dropout": 0.0,
   "weight_decay": 0.0,
   "optimizer": "adam",
-  "distribution_type": "quantity_skew",
-  "distribution_param": 0.5,
+  "distribution_type": "iid",
+  "distribution_param": null,
   "sample_size": null,
   "sample_frac": null,
-  "model_type": "CNN",
-  "task_type": "classification",
-  "client_dropout_rate": 0.1,
-  "save_weights": true,
+  "model_type": "MLP",
+  "task_type": "regression",
+  "client_dropout_rate": 0.0,
+  "save_weights": false,
+  "dataset": "california_housing",
+  "dataset_args": {
+    "test_size": 0.2,
+    "seed": 113,
+    "scaler": "standard",
+    "y_standardize": true
+  },
+  "distribution_bins": 10,
   "output": "clients.csv"
 }

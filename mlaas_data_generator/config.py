@@ -27,5 +27,8 @@ CONFIG = {
     "distribution_param": None,
     "sample_size": 30000,
     "sample_frac": 0.5,
-    "client_dropout_rate": 0.0
+    "client_dropout_rate": 0.0,
+    "task_type": "classification",
+    "distribution_bins": 10,
+    "dataset_args": None
 }

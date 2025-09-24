@@ -20,5 +20,5 @@ def resolve_output_path(
     fname = Path(filename).name
     if not fname.lower().endswith(".csv"):
         fname += ".csv"
-    return base / filename
+    return base / fname
 

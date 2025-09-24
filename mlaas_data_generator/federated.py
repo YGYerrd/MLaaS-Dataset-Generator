@@ -59,6 +59,20 @@ class FederatedDataGenerator:
         requested_task = task_type or self.config.get("task_type")
         meta_task = meta.get("task_type", "classification")
         self.task_type = requested_task or meta_task
+
+        if self.task_type == "clustering":
+            self.metric_key = "silhouette"
+        elif self.task_type == "classification":
+            self.metric_key = "accuracy"
+        else:
+            self.metric_key = "rmse"
+
+        # Human label for printing
+        if self.task_type == "clustering":
+            self.metric_label = "Silhouette"
+        else:
+            self.metric_label = "Accuracy" if self.task_type == "classification" else "RMSE"
+
         if requested_task != meta_task:
             print(f"Warning: overriding dataset task type '{meta_task}' with requested '{self.task_type}'.")
         
@@ -79,13 +93,6 @@ class FederatedDataGenerator:
                 self.distribution_range = (0.0, 1.0)
         else:
             self.distribution_range = None
-
-        if self.task_type == "regression":
-            self.metric_key = "rmse"
-            self.metric_label = "RMSE"
-        else:
-            self.metric_key = "accuracy"
-            self.metric_label = "Accuracy"
 
         hidden_layers = self.config.get(
             "hidden_layers", [self.config.get("reduced_neurons", 64)]
@@ -266,11 +273,75 @@ class FederatedDataGenerator:
         }
     
     def _train_client(self, client_id, x, y, distribution, global_model, run_meta, round_idx, rounds_so_far, comm_down):
+    # CLUSTERING: local-only, no aggregation
+        if self.task_type == "clustering":
+            X = x  # y is unused
+            t0 = time.time()
+            local_model = self._build_model()  # returns KMeansAdapter
+            local_model.fit(X)
+            duration = time.time() - t0
+
+            # Evaluate on the global test set for consistency
+            try:
+                loss, sil, inertia = local_model.evaluate(self.x_test)
+            except Exception:
+                loss, sil, inertia = (np.nan, np.nan, np.nan)
+
+            # Optional supervised-structure metrics when labels exist
+            ari = nmi = np.nan
+            try:
+                if self.y_test is not None:
+                    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+                    preds = local_model.predict(self.x_test)
+                    if preds.shape[0] == self.y_test.shape[0]:
+                        ari = float(adjusted_rand_score(self.y_test, preds))
+                        nmi = float(normalized_mutual_info_score(self.y_test, preds))
+            except Exception:
+                pass
+
+            # Comm accounting (no real aggregation yet)
+            try:
+                comm_up = self._weights_size(local_model.get_weights())
+            except Exception:
+                comm_up = 0
+
+            record = self._make_record(
+                run_meta=run_meta,
+                round_idx=round_idx,
+                client_id=client_id,
+                participated=True,
+                fail_reason="",
+                distribution=distribution,
+                samples_count=len(X),
+                duration=duration,
+                loss=np.nan,
+                metric_value=sil,
+                metric_score=self._metric_score(sil),
+                extra_metric=inertia,
+                rounds_so_far=rounds_so_far,
+                comm_down=comm_down,
+                comm_up=comm_up,
+            )
+            # add clustering-specific columns
+            record.update({
+                "silhouette": sil,
+                "inertia": inertia,
+                "ari": ari,
+                "nmi": nmi,
+                "clustering_k": getattr(local_model, "k", np.nan),
+                "clustering_init": getattr(getattr(local_model, "kw", {}), "get", lambda *_: None)("init"),
+                "clustering_n_init": getattr(getattr(local_model, "kw", {}), "get", lambda *_: None)("n_init"),
+                "clustering_max_iter": getattr(getattr(local_model, "kw", {}), "get", lambda *_: None)("max_iter"),
+                "clustering_tol": getattr(getattr(local_model, "kw", {}), "get", lambda *_: None)("tol"),
+                "clustering_agg": "local_only",
+            })
+            # IMPORTANT: return None for "weights" so the caller does not try to aggregate
+            return record, None
+
+        # CLASSIFICATION / REGRESSION path (unchanged)
         local_model = self._build_model()
         local_model.set_weights(global_model.get_weights())
-
         samples_count = len(y)
-
         start = time.time()
         try:
             weights = train_local_model(
@@ -280,13 +351,10 @@ class FederatedDataGenerator:
             )
             duration = time.time() - start
             loss, metric_value, extra_metric = evaluate_model(
-                local_model,
-                self.x_test,
-                self.y_test,
-                task_type=self.task_type,
+                local_model, self.x_test, self.y_test, task_type=self.task_type,
             )
             metric_score = self._metric_score(metric_value)
-            
+
             if self.save_weights:
                 with open(f"weights/{client_id}_round_{round_idx}.json", "w") as f:
                     json.dump({k: v.tolist() for k, v in weights.items()}, f, indent=4)
@@ -331,7 +399,20 @@ class FederatedDataGenerator:
             )
             return rec, None
 
+
     def _aggregate_and_eval(self, global_model, client_weights, round_idx):
+        # CLUSTERING: no aggregation; compute a "global" metric by fitting a fresh adapter
+        if self.task_type == "clustering":
+            try:
+                tmp = self._build_model()
+                tmp.fit(self.x_train)
+                _, sil, inertia = tmp.evaluate(self.x_test)
+            except Exception:
+                sil, inertia = (np.nan, np.nan)
+            metric_score = self._metric_score(sil)
+            return np.nan, sil, metric_score, inertia
+
+        # CLASSIFICATION / REGRESSION (existing behaviour)
         if client_weights:
             new_global_weights = aggregate_weights(client_weights)
             global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
@@ -339,14 +420,13 @@ class FederatedDataGenerator:
                 json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
         else:
             print("No participating clients this round; keeping previous global weights.")
+
         loss, metric_value, extra_metric = evaluate_model(
-            global_model,
-            self.x_test,
-            self.y_test,
-            task_type=self.task_type,
+            global_model, self.x_test, self.y_test, task_type=self.task_type,
         )
         metric_score = self._metric_score(metric_value)
         return loss, metric_value, metric_score, extra_metric
+
 
     def _make_record(
         self,
@@ -385,6 +465,9 @@ class FederatedDataGenerator:
             "comm_bytes_up": comm_up,
             "comm_bytes_down": comm_down,
         }
+        if self.task_type == "clustering":
+            record["silhouette"] = metric_value
+            record["inertia"]    = extra_metric
         if self.task_type == "classification":
             record["accuracy"] = metric_value
             record["f1"] = extra_metric
@@ -423,14 +506,15 @@ class FederatedDataGenerator:
         )
 
     def _metric_score(self, metric_value):
-        if metric_value is None:
-            return np.nan
-        metric_value = float(metric_value)
+        metric_value = float(metric_value) if metric_value is not None else np.nan
         if np.isnan(metric_value):
             return np.nan
         if self.task_type == "regression":
+            # your current mapping 1/(1+rmse)
             return 1.0 / (1.0 + metric_value)
+        # classification and clustering both "higher is better"
         return metric_value
+
 
     def _weights_size(self, weights_dict_or_list):
         if isinstance(weights_dict_or_list, dict):

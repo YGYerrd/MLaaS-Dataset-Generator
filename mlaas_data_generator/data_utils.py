@@ -85,13 +85,12 @@ def _load_sklearn(name: str, test_size=0.2, seed=42, scaler="standard", y_standa
         )
         x_train, x_test, scaler_used = _apply_scaler(x_train, x_test, scaler)
 
-        # Optional target standardization to help optimization (store params in meta)
         y_train, y_test, y_scaler = _apply_target_scaler(y_train, y_test, "standard" if y_standardize else None)
 
         meta = {
             **_meta("regression", (x_train.shape[1],), num_classes=None,
                     feature_names=getattr(bunch, "feature_names", None), scaler=scaler_used),
-            "target_scaler": y_scaler,  # {'type':'standard', 'mean':..., 'std':...} or None
+            "target_scaler": y_scaler
         }
         return (x_train, y_train), (x_test, y_test), meta
 

@@ -137,7 +137,7 @@ def add_generate_subparser(subparsers):
     p.add_argument("--client-dropout-rate", type=float, default=None, help="Per-round probability a client skips training (0.0–1.0)")
     p.add_argument("--model-type", type=str, default=None, choices=["CNN","MLP","LogReg","ResNet","Custom"],
                    help="Model family recorded in run metadata (and used by create_model if applicable)")
-    p.add_argument("--task-type", type=str, default=None, choices=["classification","regression"], help="Task type metadata")
+    p.add_argument("--task-type", type=str, default=None, choices=["classification","regression", "clustering"], help="Task type metadata")
     p.add_argument("--output", type=str, default="clients.csv", help="Output CSV file")
     p.add_argument("--dataset", type=str, default="mnist", choices=DATASET_CHOICES, help="Dataset to use")
     p.add_argument("--dataset-arg", action="append", default=[], metavar="KEY=VALUE",

@@ -1,11 +1,11 @@
 {
   "num_clients": 10,
-  "num_rounds": 20,
-  "local_epochs": 5,
-  "batch_size": 64,
+  "num_rounds": 5,
+  "local_epochs": 3,
+  "batch_size": 32,
   "learning_rate": 0.001,
   "hidden_layers": [
-    128
+    64
   ],
   "activation": "relu",
   "dropout": 0.0,
@@ -16,16 +16,13 @@
   "sample_size": null,
   "sample_frac": null,
   "model_type": "MLP",
-  "task_type": "regression",
+  "task_type": "classification",
   "client_dropout_rate": 0.0,
   "save_weights": false,
-  "dataset": "california_housing",
+  "dataset": "iris",
   "dataset_args": {
-    "test_size": 0.2,
-    "seed": 113,
-    "scaler": "standard",
-    "y_standardize": true
+    "seed": 42,
+    "scaler": "standard"
   },
-  "distribution_bins": 10,
   "output": "clients.csv"
 }

@@ -40,6 +40,12 @@ class TaskStrategy:
 
     # ---- shared helpers
     def build_model(self):
+        extra = {}
+        if self.task_type() == "clustering":
+            # forward user-configured KMeans params (if provided)
+            for key in ("clustering_k","clustering_init","clustering_n_init","clustering_max_iter","clustering_tol","seed","random_state"):
+                if key in self.config:
+                    extra[key] = self.config[key]
         return create_model(
             input_shape=tuple(self.meta["input_shape"]),
             num_classes=self.meta.get("num_classes"),
@@ -49,7 +55,8 @@ class TaskStrategy:
             dropout=self.knobs["dropout"],
             weight_decay=self.knobs["weight_decay"],
             optimizer=self.knobs["optimizer"],
-            task_type=self.task_type()
+            task_type=self.task_type(),
+            **extra, 
         )
 
     def comm_down_bytes(self, global_model):

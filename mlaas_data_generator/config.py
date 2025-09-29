@@ -13,6 +13,7 @@ if OVERRIDE:
     MERGED_DIR = BASE_OUTPUT_DIR / "merged"
 
 CONFIG = {
+    "db_path": os.path.join("outputs", "federated.db"),
     "num_clients": 20,
     "num_rounds": 5,
     "local_epochs": 5,

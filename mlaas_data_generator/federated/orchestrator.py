@@ -1,8 +1,7 @@
 # orchestrator.py
 from __future__ import annotations
-import os, json, uuid, time
+import os, uuid
 import numpy as np
-import pandas as pd
 
 from ..config import CONFIG
 from ..data.loaders import load_dataset
@@ -14,12 +13,13 @@ from .task import (
 )
 from .records import (
     build_run_meta,
+    build_run_record,
     build_client_record,
     build_skip_record,
-    build_global_record,
-    attach_reliability,
-    save_global_metrics_json,
+    build_round_record
 )
+
+from ..storage.writer import make_writer
 
 class FederatedDataGenerator:
     """Generate MLaaS client records using a simple federated-learning loop."""
@@ -131,10 +131,9 @@ class FederatedDataGenerator:
             save_weights=self.save_weights,
         )
 
-    def run(self) -> pd.DataFrame:
+    def run(self):
         os.makedirs("weights", exist_ok=True)
 
-        # guard partitioning modes for regression
         if self.task_type == "regression" and self.knobs["distribution_type"] in {"dirichlet", "shard", "label_per_client"}:
             print("Warning: label-based partitioning not supported for regression; using 'iid'.")
             self.knobs["distribution_type"] = "iid"
@@ -157,6 +156,7 @@ class FederatedDataGenerator:
 
         # build global model via strategy
         global_model = self.strategy.build_model()
+
         run_meta = build_run_meta(
             run_id=str(uuid.uuid4()),
             dataset=self.dataset,
@@ -168,53 +168,55 @@ class FederatedDataGenerator:
             metric_name=self.metric_key,
         )
 
-        records = []
-        global_metrics = []
-        participated_counts = {cid: 0 for cid in clients.keys()}
+        db_path = self.config.get("db_path", "federated.db")
+        writer = make_writer("sqlite", db_path=db_path)
+        writer.start()
+        try:
+            writer.write_run(build_run_record(run_meta, self.knobs, self.config))
 
-        for round_num in range(self.knobs["num_rounds"]):
-            round_idx = round_num + 1
-            print(f"--- Round {round_idx} ---")
-            client_payloads = []
+            participated_counts = {cid: 0 for cid in clients.keys()}
 
-            # bytes to broadcast down: size of global weights (strategy computes)
-            down_bytes = self.strategy.comm_down_bytes(global_model)
+            for round_num in range(self.knobs["num_rounds"]):
+                round_idx = round_num + 1
+                print(f"--- Round {round_idx} ---")
+                client_weights = []
 
-            for client_id, data in clients.items():
+                # bytes to broadcast down: size of global weights (strategy computes)
+                down_bytes = self.strategy.comm_down_bytes(global_model)
 
-                distribution = get_data_distribution(
-                    data["y"], self.num_classes, bins=self.knobs.get("distribution_bins"), value_range=self.distribution_range
-                )
-                n_samples = len(data["y"])
+                for client_id, data in clients.items():
 
-                # dropout
-                if self.rng.random() < self.config.get("client_dropout_rate", 0.0):
-                    records.append(
-                        build_skip_record(
+                    distribution = get_data_distribution(
+                        data["y"], self.num_classes, bins=self.knobs.get("distribution_bins"), value_range=self.distribution_range
+                    )
+                    n_samples = len(data["y"])
+
+                    # dropout
+                    if self.rng.random() < self.config.get("client_dropout_rate", 0.0):
+                        row = build_skip_record(
                             run_meta, round_idx, client_id, distribution, n_samples,
                             rounds_so_far=participated_counts[client_id],
                             comm_down=down_bytes
                         )
+                        writer.write_client_round(row)
+                        print(f"{client_id} dropped out ")
+                        continue
+
+                    # train client via strategy
+                    next_rounds_so_far = participated_counts[client_id] + 1
+
+                    print(f"{client_id} training...")
+                    
+                    outcome = self.strategy.train_client(
+                        client_id=client_id,
+                        x=data["x"], y=data["y"],
+                        global_model=global_model,
+                        round_idx=round_idx,
+                        rounds_so_far=next_rounds_so_far,
+                        comm_down=down_bytes,
                     )
-                    print(f"{client_id} dropped out ")
-                    continue
-
-                # train client via strategy
-                next_rounds_so_far = participated_counts[client_id] + 1
-
-                print(f"{client_id} training...")
-                
-                outcome = self.strategy.train_client(
-                    client_id=client_id,
-                    x=data["x"], y=data["y"],
-                    global_model=global_model,
-                    round_idx=round_idx,
-                    rounds_so_far=next_rounds_so_far,
-                    comm_down=down_bytes,
-                )
-                # record
-                records.append(
-                    build_client_record(
+                    # record
+                    row = build_client_record(
                         run_meta=run_meta,
                         round_idx=round_idx,
                         client_id=client_id,
@@ -223,53 +225,52 @@ class FederatedDataGenerator:
                         outcome=outcome,
                         task_type=self.task_type,
                     )
+                    writer.write_client_round(row)
+
+                    # collect payload for aggregation (weights for NN, None for clustering)
+                    if outcome.payload is not None:
+                        client_weights.append(outcome.payload)
+                        participated_counts[client_id] = next_rounds_so_far
+
+                # aggregate & evaluate globally
+                loss, global_metric, global_score, global_extra = self.strategy.aggregate_and_eval(
+                    global_model=global_model,
+                    client_weights=client_weights,
+                    round_idx=round_idx,
+                    x_train=self.x_train,
+                    x_test=self.x_test,
+                    y_test=self.y_test,
                 )
-                # collect payload for aggregation (weights for NN, None for clustering)
-                if outcome.payload is not None:
-                    client_payloads.append(outcome.payload)
-                    participated_counts[client_id] = next_rounds_so_far
 
-            # aggregate & evaluate globally (strategy handles details, including eval)
-            loss, global_metric, global_score, global_extra = self.strategy.aggregate_and_eval(
-                global_model=global_model,
-                client_payloads=client_payloads,
-                round_idx=round_idx,
-                x_train=self.x_train,         # clustering needs this for proxy-global fit
-                x_test=self.x_test,
-                y_test=self.y_test,
-            )
+                writer.write_round(
+                    build_round_record(
+                        run_meta,
+                        round_idx=round_idx,
+                        loss=loss,
+                        global_metric=global_metric,
+                        global_score=global_score,
+                        global_extra=global_extra,
+                    )
+                )
 
-            # print
-            if self.task_type == "regression" and self.target_scaler and self.target_scaler.get("type") == "standard":
-                rmse_std = float(global_metric)
-                rmse_orig = rmse_std * float(self.target_scaler["std"])
-                print(f"Global model {self.metric_label}: {rmse_std:.6f} (standardized) | {rmse_orig:.2f} (original units)")
-            else:
-                print(f"Global model {self.metric_label}: {global_metric}")
+                if self.task_type == "regression" and self.target_scaler and self.target_scaler.get("type") == "standard":
+                    rmse_std = float(global_metric)
+                    rmse_orig = rmse_std * float(self.target_scaler["std"])
+                    print(f"Global model {self.metric_label}: {rmse_std:.6f} (standardized) | {rmse_orig:.2f} (original units)")
+                else:
+                    print(f"Global model {self.metric_label}: {global_metric}")
 
-            if self.task_type == "regression":
-                print(f"Global metric score: {global_score}")
-            if global_extra is not None:
-                print(f"Global auxiliary metric: {global_extra}")
-
-            gm_record = build_global_record(
-                round_idx=round_idx,
-                metric_key=self.metric_key,
-                loss=loss,
-                metric_value=global_metric,
-                metric_score=global_score,
-                aux_metric=global_extra,
-                target_scaler=self.target_scaler,
-            )
-            global_metrics.append(gm_record)
-
-        # persist global metrics (json)
-        save_global_metrics_json(metric_key=self.metric_key, records=global_metrics, task_type=self.task_type, save=self.save_weights)
-
-        # dataframe + reliability
-        df = pd.DataFrame(records)
-        if not df.empty:
-            df = attach_reliability(df, source_col="metric_score" if "metric_score" in df.columns else "accuracy")
+                if self.task_type == "regression":
+                    print(f"Global metric score: {global_score}")
+                if global_extra is not None:
+                    print(f"Global auxiliary metric: {global_extra}")
+        finally:
+            writer.finish()
 
         print("Federated Learning Process Complete!\n")
-        return df
+        return {
+            "run_id": run_meta["run_id"],
+            "db_path": db_path,
+            "rounds": self.knobs["num_rounds"],
+            "clients": self.knobs["num_clients"],
+        }

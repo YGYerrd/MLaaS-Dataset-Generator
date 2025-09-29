@@ -3,13 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json, time, numpy as np
 
-from ..model_utils import create_model, train_local_model, evaluate_model
-from .records import (
-    metric_score_value,
-    weights_size,
-    aggregate_nn_and_eval,   # FedAvg + evaluate for NN tasks
-    eval_clustering_global,  # proxy-global fit+eval for clustering
-)
+from ..models.train_eval import train_local_model, evaluate_model, aggregate_weights
+from ..models.builders import create_model
+
+def metric_score_value(task_type: str, metric_value: float | None) -> float:
+    """Map raw metric to a [0,1]-ish score. For classification/clustering, identity; for regression, 1/(1+rmse)."""
+    mv = float(metric_value) if metric_value is not None else np.nan
+    if mv != mv:  # NaN
+        return np.nan
+    if task_type == "regression":
+        return 1.0 / (1.0 + mv)
+    return mv
+
+def weights_size(weights_dict_or_list) -> int:
+    if not weights_dict_or_list:
+        return 0
+    arrays = weights_dict_or_list.values() if isinstance(weights_dict_or_list, dict) else weights_dict_or_list
+    return int(sum(np.asarray(w).nbytes for w in arrays))
 
 @dataclass
 class ClientOutcome:
@@ -111,15 +121,20 @@ class ClassificationStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
-        return aggregate_nn_and_eval(
-            global_model=global_model,
-            client_weights=client_payloads,
-            round_idx=round_idx,
-            task_type="classification",
-            x_test=x_test, y_test=y_test,
-            save=self.save_weights,
-        )
+    def aggregate_and_eval(self, global_model, client_weights, round_idx, x_train, x_test, y_test,):
+        if client_weights:
+            new_global_weights = aggregate_weights(client_weights)
+            # Keep parity with your existing set_weights(list_ordered)
+            global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
+            if self.save_weights:
+                with open(f"weights/global_round_{round_idx}.json", "w") as f:
+                    json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
+        else:
+            print("No participating clients this round; keeping previous global weights.")
+
+        loss, metric_value, extra_metric = evaluate_model(global_model, x_test, y_test, task_type="classification")
+        mscore = metric_score_value("classification", metric_value)
+        return loss, metric_value, mscore, extra_metric
 
 # -------------------- Regression --------------------
 
@@ -160,15 +175,20 @@ class RegressionStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
-        return aggregate_nn_and_eval(
-            global_model=global_model,
-            client_weights=client_payloads,
-            round_idx=round_idx,
-            task_type="regression",
-            x_test=x_test, y_test=y_test,
-            save=self.save_weights,
-        )
+    def aggregate_and_eval(self, global_model, client_weights, round_idx, x_train, x_test, y_test,):
+        if client_weights:
+            new_global_weights = aggregate_weights(client_weights)
+            # Keep parity with your existing set_weights(list_ordered)
+            global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
+            if self.save_weights:
+                with open(f"weights/global_round_{round_idx}.json", "w") as f:
+                    json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
+        else:
+            print("No participating clients this round; keeping previous global weights.")
+
+        loss, metric_value, extra_metric = evaluate_model(global_model, x_test, y_test, task_type="regression")
+        mscore = metric_score_value("regression", metric_value)
+        return loss, metric_value, mscore, extra_metric
 
 # -------------------- Clustering --------------------
 
@@ -223,8 +243,16 @@ class ClusteringStrategy(TaskStrategy):
         )
 
     def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
-        # no aggregation; compute a proxy global metric by fitting on full train
-        return eval_clustering_global(build_model_fn=self.build_model, x_train=x_train, x_test=x_test)
+        try:
+            tmp = self.build_model()   # fresh adapter with same knobs
+            tmp.fit(x_train)           # fit on full training set
+            _, sil, inertia = tmp.evaluate(x_test)
+        except Exception:
+            sil, inertia = (np.nan, np.nan)
+
+        mscore = metric_score_value("clustering", sil)
+        # loss is not meaningful for silhouette; return NaN for consistency
+        return np.nan, sil, mscore, inertia
 
 # -------------------- factory --------------------
 

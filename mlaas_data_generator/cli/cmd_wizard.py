@@ -1,8 +1,10 @@
 # cli/cmd_wizard.py
 from __future__ import annotations
 import argparse
+import sqlite3
+import pandas as pd
 from ..config import CONFIG
-from ..path_resolver import resolve_output_path
+from ..path_resolver import resolve_table_output_paths
 from ..federated.orchestrator import FederatedDataGenerator
 from .profiles import DATASET_CHOICES, infer_dataset_profile
 
@@ -225,8 +227,6 @@ def _handle(args: argparse.Namespace) -> None:
         seed_raw = questionary.text("Random seed (blank = none):", default="").ask().strip()
         seed = int(seed_raw) if seed_raw else None
 
-    output = questionary.text("Output CSV filename:", default="clients.csv").ask()
-
     # Config
     config = {
         "num_clients": num_clients,
@@ -267,19 +267,43 @@ def _handle(args: argparse.Namespace) -> None:
         if clustering_tol is not None:      config["clustering_tol"] = clustering_tol
 
     print("\n=== Run Summary ===")
-    pprint.pprint({**config, "output": output})
+    pprint.pprint(config)
     if not questionary.confirm("Proceed?").ask():
         print("Aborted."); return
 
     with open(args.save, "w") as f:
-        _json.dump({**config, "output": output}, f, indent=2)
+        _json.dump(config, f, indent=2)
     print(f"Saved configuration to {args.save}")
 
-    gen = FederatedDataGenerator(config=config, dataset=dataset)
-    df = gen.run()
-    out_path = resolve_output_path(output, kind="run")
-    df.to_csv(out_path, index=False)
-    print(f"Wrote {len(df)} client records to {out_path}")
+    gen = FederatedDataGenerator(config=config, dataset=dataset)    
+    summary = gen.run()
+    run_id = summary["run_id"]
+    db_path = summary["db_path"]
+
+    con = sqlite3.connect(db_path)
+    try:
+        runs_df = pd.read_sql_query(
+            "SELECT * FROM runs WHERE run_id = ?",
+            con, params=[run_id]
+        )
+        rounds_df = pd.read_sql_query(
+            "SELECT * FROM rounds WHERE run_id = ? ORDER BY round",
+            con, params=[run_id]
+        )
+        clients_df = pd.read_sql_query(
+            "SELECT * FROM client_rounds WHERE run_id = ? ORDER BY round, client_id",
+            con, params=[run_id]
+        )
+    finally:
+        con.close()
+
+    runs_df.to_csv("outputs/runs.csv", index=False)
+    rounds_df.to_csv("outputs/rounds.csv", index=False)
+    clients_df.to_csv("outputs/client_rounds", index=False)
+    print("Wrote tables:")
+    print("  runs -> outputs/runs.csv")
+    print("  rounds -> outputs/rounds.csv")
+    print("  client_rounds -> outputs/client_rounds.csv")
 
 def register_wizard(subparsers):
     p = subparsers.add_parser("wizard", help="Interactive setup & run")

@@ -226,11 +226,12 @@ class FederatedDataGenerator:
                         task_type=self.task_type,
                     )
                     writer.write_client_round(row)
+                    
+                    if outcome.participated:
+                        participated_counts[client_id] = next_rounds_so_far
 
-                    # collect payload for aggregation (weights for NN, None for clustering)
                     if outcome.payload is not None:
                         client_weights.append(outcome.payload)
-                        participated_counts[client_id] = next_rounds_so_far
 
                 # aggregate & evaluate globally
                 loss, global_metric, global_score, global_extra = self.strategy.aggregate_and_eval(

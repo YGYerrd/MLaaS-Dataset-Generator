@@ -1,7 +1,8 @@
 from __future__ import annotations
 import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import silhouette_score, accuracy_score, f1_score, mean_squared_error
 
 class KMeansAdapter:
     """
@@ -54,18 +55,72 @@ class KMeansAdapter:
         return (np.nan, sil, inertia)
 
     def get_weights(self):
-        if self._centers is None:
-            return []
-        return [self._centers.astype("float32")]
+        return []
 
     def set_weights(self, weights_list):
-        if not weights_list:
-            return
-        centers = np.asarray(weights_list[0], dtype="float32")
-        self._centers = centers
-        if self.km is None:
-            self.km = KMeans(n_clusters=centers.shape[0], **self.kw)
         return
 
     def count_params(self):
         return 0 if self._centers is None else int(self._centers.size)
+
+
+class EstimatorAdapter:
+    """Minimal wrapper to present sklearn estimators with a Keras-like surface."""
+
+    def __init__(self, estimator, task_type: str):
+        self.estimator = estimator
+        self._task_type = task_type
+
+    def _reshape(self, X):
+        X = np.asarray(X)
+        if X.ndim > 2:
+            return X.reshape((X.shape[0], -1))
+        return X
+
+    def fit(self, X, y, epochs=None, batch_size=None, verbose=0):
+        self.estimator.fit(self._reshape(X), y)
+        return self
+
+    def predict(self, X, verbose=0):
+        Xr = self._reshape(X)
+        if self._task_type == "classification":
+            if hasattr(self.estimator, "predict_proba"):
+                return self.estimator.predict_proba(Xr)
+            preds = self.estimator.predict(Xr)
+            classes = getattr(self.estimator, "classes_", None)
+            if classes is not None:
+                class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
+                eye = np.eye(len(classes), dtype="float32")
+                return eye[[class_to_idx[p] for p in preds]]
+            return preds
+        return self.estimator.predict(Xr)
+
+    def evaluate(self, X, y_true, verbose=0):
+        Xr = self._reshape(X)
+        if self._task_type == "classification":
+            y_pred = self.estimator.predict(Xr)
+            acc = float(accuracy_score(y_true, y_pred))
+            f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+            return np.nan, acc, f1
+
+        y_pred = self.estimator.predict(Xr)
+        mse = float(mean_squared_error(y_true, y_pred))
+        rmse = float(np.sqrt(mse))
+        return mse, rmse, None
+
+    def get_weights(self):
+        return []
+
+    def set_weights(self, weights_list):
+        return
+
+    def count_params(self):
+        return 0
+
+
+def make_random_forest(task_type: str, **kwargs) -> EstimatorAdapter:
+    if task_type == "regression":
+        estimator = RandomForestRegressor(**kwargs)
+    else:
+        estimator = RandomForestClassifier(**kwargs)
+    return EstimatorAdapter(estimator, task_type)

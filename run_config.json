@@ -1,11 +1,11 @@
 {
-  "num_clients": 2,
+  "num_clients": 5,
   "num_rounds": 5,
-  "local_epochs": 3,
-  "batch_size": 32,
+  "local_epochs": 5,
+  "batch_size": 64,
   "learning_rate": 0.001,
   "hidden_layers": [
-    64
+    128
   ],
   "activation": "relu",
   "dropout": 0.0,
@@ -15,10 +15,11 @@
   "distribution_param": null,
   "sample_size": null,
   "sample_frac": null,
-  "model_type": "CNN",
+  "model_type": "mobilenetv2",
   "task_type": "classification",
   "client_dropout_rate": 0.0,
   "save_weights": false,
   "dataset": "mnist",
-  "dataset_args": {}
+  "dataset_args": {},
+  "distribution_bins": 10
 }

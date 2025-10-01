@@ -21,6 +21,10 @@ def weights_size(weights_dict_or_list) -> int:
     arrays = weights_dict_or_list.values() if isinstance(weights_dict_or_list, dict) else weights_dict_or_list
     return int(sum(np.asarray(w).nbytes for w in arrays))
 
+def _is_keras_like(m) -> bool:
+    return hasattr(m, "get_weights") and callable(getattr(m, "get_weights", None)) \
+        and hasattr(m, "set_weights") and callable(getattr(m, "set_weights", None))
+
 @dataclass
 class ClientOutcome:
     participated: bool
@@ -52,10 +56,14 @@ class TaskStrategy:
     def build_model(self):
         extra = {}
         if self.task_type() == "clustering":
-            # forward user-configured KMeans params (if provided)
             for key in ("clustering_k","clustering_init","clustering_n_init","clustering_max_iter","clustering_tol","seed","random_state"):
                 if key in self.config:
                     extra[key] = self.config[key]
+        else:
+            for key in ("rf_trees", "rf_max_depth", "mobilenet_trainable", "n_estimators", "max_depth"):
+                if key in self.config:
+                    extra[key] = self.config[key]
+
         return create_model(
             input_shape=tuple(self.meta["input_shape"]),
             num_classes=self.meta.get("num_classes"),
@@ -66,6 +74,7 @@ class TaskStrategy:
             weight_decay=self.knobs["weight_decay"],
             optimizer=self.knobs["optimizer"],
             task_type=self.task_type(),
+            model_type=self.config.get("model_type"),
             **extra, 
         )
 
@@ -89,8 +98,14 @@ class ClassificationStrategy(TaskStrategy):
 
     def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down) -> ClientOutcome:
         local_model = self.build_model()
-        local_model.set_weights(global_model.get_weights())
         samples_count = len(y)
+
+        if _is_keras_like(local_model) and _is_keras_like(global_model):
+            try:
+                local_model.set_weights(global_model.get_weights())
+            except Exception:
+                pass
+        
         start = time.time()
         try:
             weights = train_local_model(
@@ -102,7 +117,7 @@ class ClassificationStrategy(TaskStrategy):
             loss, metric_value, extra_metric = evaluate_model(local_model, self.x_test, self.y_test, task_type="classification")
             mscore = metric_score_value("classification", metric_value)
 
-            if self.save_weights:
+            if self.save_weights and weights is not None:
                 with open(f"weights/{client_id}_round_{round_idx}.json", "w") as f:
                     json.dump({k: v.tolist() for k, v in weights.items()}, f, indent=4)
 
@@ -128,7 +143,7 @@ class ClassificationStrategy(TaskStrategy):
             global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
             if self.save_weights:
                 with open(f"weights/global_round_{round_idx}.json", "w") as f:
-                    json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
+                    json.dump({k: np.asarray(v).tolist() for k, v in new_global_weights.items()}, f, indent=4)
         else:
             print("No participating clients this round; keeping previous global weights.")
 
@@ -143,8 +158,12 @@ class RegressionStrategy(TaskStrategy):
 
     def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down) -> ClientOutcome:
         local_model = self.build_model()
-        local_model.set_weights(global_model.get_weights())
         samples_count = len(y)
+        if _is_keras_like(local_model) and _is_keras_like(global_model):
+            try:
+                local_model.set_weights(global_model.get_weights())
+            except Exception:
+                pass
         start = time.time()
         try:
             weights = train_local_model(
@@ -156,9 +175,9 @@ class RegressionStrategy(TaskStrategy):
             loss, metric_value, extra_metric = evaluate_model(local_model, self.x_test, self.y_test, task_type="regression")
             mscore = metric_score_value("regression", metric_value)
 
-            if self.save_weights:
+            if self.save_weights and weights is not None:
                 with open(f"weights/{client_id}_round_{round_idx}.json", "w") as f:
-                    json.dump({k: v.tolist() for k, v in weights.items()}, f, indent=4)
+                    json.dump({k: np.asarray(v).tolist() for k, v in weights.items()}, f, indent=4)
 
             return ClientOutcome(
                 participated=True, fail_reason="", samples_count=samples_count, duration=duration,
@@ -182,7 +201,7 @@ class RegressionStrategy(TaskStrategy):
             global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
             if self.save_weights:
                 with open(f"weights/global_round_{round_idx}.json", "w") as f:
-                    json.dump({k: v.tolist() for k, v in new_global_weights.items()}, f, indent=4)
+                    json.dump({k: np.asarray(v).tolist() for k, v in new_global_weights.items()}, f, indent=4)
         else:
             print("No participating clients this round; keeping previous global weights.")
 

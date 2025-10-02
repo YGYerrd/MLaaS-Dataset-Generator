@@ -7,10 +7,9 @@ from ..config import CONFIG
 from ..data.loaders import load_dataset
 from ..data.splitters import split_data
 from ..data.distributions import get_data_distribution
+from ..storage.writer import make_writer
+from .task import make_task_strategy
 
-from .task import (
-    make_task_strategy,     # factory: returns a TaskStrategy for the task_type
-)
 from .records import (
     build_run_meta,
     build_run_record,
@@ -18,8 +17,6 @@ from .records import (
     build_skip_record,
     build_round_record
 )
-
-from ..storage.writer import make_writer
 
 class FederatedDataGenerator:
     """Generate MLaaS client records using a simple federated-learning loop."""

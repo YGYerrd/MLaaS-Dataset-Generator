@@ -144,12 +144,6 @@ def build_client_record(run_meta, round_idx, client_id, distribution, metric_key
         "clustering_agg": extras.get("clustering_agg"),
 
         "availability_flag": 1 if outcome.participated else 0,
-        "throughput_eps": _nan_or(extras.get("throughput_eps")),
-        "inference_latency_ms_mean": _nan_or(extras.get("inference_latency_ms_mean")),
-        "inference_latency_ms_p95": _nan_or(extras.get("inference_latency_ms_p95")),
-        "compute_cost_usd": _nan_or(extras.get("compute_cost_usd")),
-        "total_cost_usd": _nan_or(extras.get("total_cost_usd")),
-        "reliability_score": _nan_or(extras.get("reliability_score")),
     }
 
 def build_skip_record(run_meta, round_idx, client_id, distribution, samples_count, rounds_so_far, comm_down):
@@ -191,12 +185,6 @@ def build_skip_record(run_meta, round_idx, client_id, distribution, samples_coun
         "clustering_agg": None,
 
         "availability_flag": 0,
-        "throughput_eps": None,
-        "inference_latency_ms_mean": None,
-        "inference_latency_ms_p95": None,
-        "compute_cost_usd": None,
-        "total_cost_usd": None,
-        "reliability_score": None,
     }
 
 def build_global_record(round_idx, metric_key, loss, metric_value, metric_score, aux_metric, target_scaler=None):
@@ -212,14 +200,6 @@ def build_global_record(round_idx, metric_key, loss, metric_value, metric_score,
         rec["aux_metric"] = float(aux_metric)
     return rec
 
-def attach_reliability(df, source_col="metric_score"):
-    reliability = (
-        df.groupby("client_id")[source_col]
-          .mean()
-          .reset_index()
-          .rename(columns={source_col: "reliability_Score"})
-    )
-    return df.merge(reliability, on="client_id", how="left")
 
 def save_global_metrics_json(metric_key: str, records: list[dict], task_type: str, save: bool):
     if not save:

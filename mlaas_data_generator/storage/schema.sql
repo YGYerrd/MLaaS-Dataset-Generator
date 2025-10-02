@@ -105,17 +105,8 @@ CREATE TABLE IF NOT EXISTS client_rounds (
   nmi                          REAL,
   clustering_k                 INTEGER,
   clustering_agg               TEXT,
-
-  -- QoS/cost extensions
+  
   availability_flag            INTEGER,  -- 0/1
-  throughput_eps               REAL,
-  inference_latency_ms_mean    REAL,
-  inference_latency_ms_p95     REAL,
-  compute_cost_usd             REAL,
-  total_cost_usd               REAL,
-
-  reliability_score            REAL,
-
   PRIMARY KEY (run_id, round, client_id),
   FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
   -- If you later want to enforce (run_id, round) existence, you can add:

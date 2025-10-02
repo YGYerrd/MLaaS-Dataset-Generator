@@ -1,26 +1,27 @@
 {
-  "num_clients": 10,
-  "num_rounds": 10,
-  "local_epochs": 15,
-  "batch_size": 64,
-  "learning_rate": 0.001,
-  "hidden_layers": [
-    128,
-    128
-  ],
+  "num_clients": 20,
+  "num_rounds": 5,
+  "local_epochs": 1,
+  "batch_size": null,
+  "learning_rate": null,
+  "hidden_layers": [],
   "activation": "relu",
   "dropout": 0.0,
-  "weight_decay": 0.0001,
+  "weight_decay": 0.0,
   "optimizer": "adam",
-  "distribution_type": "quantity_skew",
-  "distribution_param": 1.0,
+  "distribution_type": "iid",
+  "distribution_param": null,
   "sample_size": null,
   "sample_frac": null,
-  "model_type": "cnn",
-  "task_type": "classification",
+  "model_type": "mlp",
+  "task_type": "clustering",
   "client_dropout_rate": 0.0,
   "save_weights": false,
-  "dataset": "fashion_mnist",
-  "dataset_args": {},
+  "dataset": "iris",
+  "dataset_args": {
+    "test_size": 0.2,
+    "seed": 42,
+    "scaler": "standard"
+  },
   "distribution_bins": 10
 }

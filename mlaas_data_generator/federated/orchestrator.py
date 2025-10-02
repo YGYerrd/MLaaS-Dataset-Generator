@@ -180,7 +180,7 @@ class FederatedDataGenerator:
             for round_num in range(self.knobs["num_rounds"]):
                 round_idx = round_num + 1
                 print(f"--- Round {round_idx} ---")
-                client_weights = []
+                client_payloads = []
                 round_metrics = []
                 skipped_clients = 0
 
@@ -249,12 +249,12 @@ class FederatedDataGenerator:
                         participated_counts[client_id] = next_rounds_so_far
 
                     if outcome.payload is not None:
-                        client_weights.append(outcome.payload)
+                        client_payloads.append(outcome.payload)
 
                 # aggregate & evaluate globally
                 loss, global_metric, global_score, global_extra = self.strategy.aggregate_and_eval(
                     global_model=global_model,
-                    client_weights=client_weights,
+                    client_payloads=client_payloads,
                     round_idx=round_idx,
                     x_train=self.x_train,
                     x_test=self.x_test,

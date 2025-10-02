@@ -158,9 +158,9 @@ class ClassificationStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_weights, round_idx, x_train, x_test, y_test,):
-        if client_weights:
-            new_global_weights = aggregate_weights(client_weights)
+    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test,):
+        if client_payloads:
+            new_global_weights = aggregate_weights(client_payloads)
             # Keep parity with your existing set_weights(list_ordered)
             global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
             if self.save_weights:
@@ -228,9 +228,9 @@ class RegressionStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_weights, round_idx, x_train, x_test, y_test,):
-        if client_weights:
-            new_global_weights = aggregate_weights(client_weights)
+    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test,):
+        if client_payloads:
+            new_global_weights = aggregate_weights(client_payloads)
             # Keep parity with your existing set_weights(list_ordered)
             global_model.set_weights([new_global_weights[f"layer_{i}"] for i in range(len(new_global_weights))])
             if self.save_weights:

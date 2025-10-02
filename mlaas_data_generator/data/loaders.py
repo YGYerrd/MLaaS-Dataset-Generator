@@ -12,8 +12,21 @@ SKLEARN_DATASETS = {
     "iris": "sklearn.datasets.load_iris",
     "wine": "sklearn.datasets.load_wine",
     "digits": "sklearn.datasets.load_digits",
-    "california_housing": "sklearn.datasets.fetch_california_housing"
+    "california_housing": "sklearn.datasets.fetch_california_housing",
+    "diabetes": "sklearn.datasets.load_diabetes",
 }
+
+# Default task per sklearn dataset (caller can override with task=...)
+SKLEARN_DEFAULT_TASK = {
+    "iris": "classification",
+    "wine": "classification",
+    "digits": "classification",
+    "california_housing": "regression",
+    "diabetes": "regression",
+}
+
+REGRESSION_DATASETS = {"california_housing", "diabetes"}
+CLASSIFICATION_DATASETS = {"iris", "wine", "digits"}  # can also be clustered if requested
 
 def _import(path):
     mod, attr = path.rsplit(".", 1)
@@ -41,11 +54,21 @@ def _load_keras(name: str):
     meta = _meta("classification", x_train.shape[1:], num_classes=int(np.max(y_train) + 1))
     return (x_train, y_train), (x_test, y_test), meta
 
-def _load_sklearn(name: str, test_size=0.2, seed=42, scaler="standard", y_standardize=True):
+def _load_sklearn(
+    name: str,
+    task: str,
+    test_size=0.2,
+    seed=42,
+    scaler="standard",
+    y_standardize=True,
+):
     loader = _import(SKLEARN_DATASETS[name])
     bunch = loader()
-    
-    if name == "california_housing":
+
+    # --- REGRESSION ---
+    if task == "regression":
+        if name not in REGRESSION_DATASETS:
+            raise ValueError(f"Dataset '{name}' does not provide a regression target.")
         X = bunch.data.astype("float32")
         y = bunch.target.astype("float32")
 
@@ -53,35 +76,69 @@ def _load_sklearn(name: str, test_size=0.2, seed=42, scaler="standard", y_standa
             X, y, test_size=test_size, random_state=seed, stratify=None
         )
         x_train, x_test, scaler_used = apply_feature_scaler(x_train, x_test, scaler)
-
-        y_train, y_test, y_scaler = apply_target_scaler(y_train, y_test, "standard" if y_standardize else None)
+        y_train, y_test, y_scaler = apply_target_scaler(
+            y_train, y_test, "standard" if y_standardize else None
+        )
 
         meta = {
-            **_meta("regression", (x_train.shape[1],), num_classes=None,
-                    feature_names=getattr(bunch, "feature_names", None), scaler=scaler_used),
-            "target_scaler": y_scaler
+            **_meta(
+                "regression",
+                (x_train.shape[1],),
+                num_classes=None,
+                feature_names=getattr(bunch, "feature_names", None),
+                scaler=scaler_used,
+            ),
+            "target_scaler": y_scaler,
         }
         return (x_train, y_train), (x_test, y_test), meta
 
-    X = bunch.data.astype("float32")
-    y = bunch.target.astype(int)
-    stratify = y
-    x_train, x_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=seed, stratify=stratify
-    )
-    x_train, x_test, scaler_used = apply_feature_scaler(x_train, x_test, scaler)
-    meta = _meta(
-        "clustering",
-        (x_train.shape[1],),
-        num_classes=int(np.unique(y).size),
-        feature_names=getattr(bunch, "feature_names", None),
-        scaler=scaler_used,
-    )
-    return (x_train, y_train), (x_test, y_test), meta
+    # --- CLASSIFICATION ---
+    if task == "classification":
+        if name not in CLASSIFICATION_DATASETS:
+            raise ValueError(f"Dataset '{name}' is not a classification dataset.")
+        X = bunch.data.astype("float32")
+        y = bunch.target.astype(int)
+        x_train, x_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=y
+        )
+        x_train, x_test, scaler_used = apply_feature_scaler(x_train, x_test, scaler)
+        meta = _meta(
+            "classification",
+            (x_train.shape[1],),
+            num_classes=int(np.unique(y).size),
+            feature_names=getattr(bunch, "feature_names", None),
+            scaler=scaler_used,
+        )
+        return (x_train, y_train), (x_test, y_test), meta
 
+    # --- CLUSTERING (default alternative for classification datasets) ---
+    if task == "clustering":
+        # We still return y so downstream can compute ARI/NMI, but do NOT stratify splits.
+        X = bunch.data.astype("float32")
+        y = bunch.target.astype(int)
+        x_train, x_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=seed, stratify=None
+        )
+        x_train, x_test, scaler_used = apply_feature_scaler(x_train, x_test, scaler)
+        meta = _meta(
+            "clustering",
+            (x_train.shape[1],),
+            num_classes=int(np.unique(y).size),
+            feature_names=getattr(bunch, "feature_names", None),
+            scaler=scaler_used,
+        )
+        return (x_train, y_train), (x_test, y_test), meta
 
-def _load_csv(csv_path: str, target: str, task: str = "regression",
-              test_size=0.2, seed=42, scaler="standard"):
+    raise ValueError(f"Unknown task '{task}'. Use 'regression'|'classification'|'clustering'.")
+
+def _load_csv(
+    csv_path: str,
+    target: str,
+    task: str = "regression",
+    test_size=0.2,
+    seed=42,
+    scaler="standard",
+):
     import pandas as pd
     df = pd.read_csv(csv_path)
     if target not in df.columns:
@@ -92,7 +149,9 @@ def _load_csv(csv_path: str, target: str, task: str = "regression",
     x_train, x_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=seed, stratify=stratify
     )
-    x_train, x_test, scaler_used = apply_feature_scaler(x_train, x_test, scaler if task == "regression" else None)
+    x_train, x_test, scaler_used = apply_feature_scaler(
+        x_train, x_test, scaler if task == "regression" else None
+    )
     meta = _meta(
         task,
         (x_train.shape[1],),
@@ -102,12 +161,14 @@ def _load_csv(csv_path: str, target: str, task: str = "regression",
     )
     return (x_train, y_train), (x_test, y_test), meta
 
-
 def load_dataset(name: str, **kwargs):
     """
     Families:
-      A) keras: mnist, fashion_mnist, cifar10
-      B) sklearn: iris, wine, digits, california_housing
+      A) keras: mnist, fashion_mnist, cifar10  (task = classification)
+      B) sklearn: iris, wine, digits, california_housing, diabetes
+         -> supply task=('classification'|'clustering'|'regression'), or omit to use per-dataset defaults:
+            iris/wine/digits -> classification
+            california_housing/diabetes -> regression
       C) csv:   pass csv_path=..., target=..., task=('regression'|'classification')
     """
     key = name.lower()
@@ -116,13 +177,17 @@ def load_dataset(name: str, **kwargs):
         return _load_keras(key)
 
     if key in SKLEARN_DATASETS:
+        # Resolve task: explicit kwarg wins, else default for that dataset.
+        task = kwargs.get("task", SKLEARN_DEFAULT_TASK.get(key, "classification"))
         return _load_sklearn(
             key,
+            task=task,
             test_size=kwargs.get("test_size", 0.2),
             seed=kwargs.get("seed", 42),
             scaler=kwargs.get("scaler", "standard"),
-            y_standardize=kwargs.get("y_standardize", True)
+            y_standardize=kwargs.get("y_standardize", True),
         )
+
     if key == "csv":
         return _load_csv(
             csv_path=kwargs["csv_path"],
@@ -132,6 +197,7 @@ def load_dataset(name: str, **kwargs):
             seed=kwargs.get("seed", 42),
             scaler=kwargs.get("scaler", "standard"),
         )
+
     raise KeyError(
         f"Unknown dataset '{name}'. Choices: {list(KERAS_DATASETS) + list(SKLEARN_DATASETS) + ['csv']}"
     )

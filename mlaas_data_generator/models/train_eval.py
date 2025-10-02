@@ -19,8 +19,8 @@ def aggregate_weights(client_weights):
     for w in client_weights[1:]:
         assert list(w.keys()) == layers, "Mismatched layer keys across clients."
     aggregated = {}
-    for i in range(layers):
-        aggregated[f"layer_{i}"] = np.mean([w[f"layer_{i}"] for w in client_weights], axis=0)
+    for layer in layers:
+        aggregated[layer] = np.mean([w[layer] for w in client_weights], axis=0)
     return aggregated
 
 def evaluate_model(model, x_test, y_test, task_type="classification"):

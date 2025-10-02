@@ -5,6 +5,7 @@ import json, time, numpy as np
 
 from ..models.train_eval import train_local_model, evaluate_model, aggregate_weights
 from ..models.builders import create_model
+from .system_metrics import ResourceTracker
 
 def metric_score_value(task_type: str, metric_value: float | None) -> float:
     """Map raw metric to a [0,1]-ish score. For classification/clustering, identity; for regression, 1/(1+rmse)."""
@@ -38,6 +39,14 @@ class ClientOutcome:
     rounds_so_far: int
     comm_down: int
     comm_up: int
+    comm_up: int
+    cpu_time_s: float | None
+    cpu_utilization: float | None
+    memory_used_mb: float | None
+    memory_utilization: float | None
+    gpu_utilization: float | None
+    gpu_memory_utilization: float | None
+    gpu_memory_used_mb: float | None
     payload: dict | list | None   # weights for NN, None for clustering
     extras: dict                  # extra columns per task
 
@@ -107,6 +116,9 @@ class ClassificationStrategy(TaskStrategy):
                 pass
         
         start = time.time()
+        tracker = ResourceTracker()
+        tracker.start()
+
         try:
             weights = train_local_model(
                 local_model, x, y,
@@ -114,6 +126,7 @@ class ClassificationStrategy(TaskStrategy):
                 batch_size=self.knobs["batch_size"],
             )
             duration = time.time() - start
+            usage = tracker.stop(duration)
             loss, metric_value, extra_metric = evaluate_model(local_model, self.x_test, self.y_test, task_type="classification")
             mscore = metric_score_value("classification", metric_value)
 
@@ -125,14 +138,23 @@ class ClassificationStrategy(TaskStrategy):
                 participated=True, fail_reason="", samples_count=samples_count, duration=duration,
                 loss=loss, metric_value=metric_value, metric_score=mscore, extra_metric=extra_metric,
                 rounds_so_far=rounds_so_far, comm_down=comm_down, comm_up=weights_size(weights),
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
                 payload=weights, extras={},  # accuracy/f1 added in records builder
             )
         except Exception:
             duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
             return ClientOutcome(
                 participated=False, fail_reason="error", samples_count=samples_count, duration=duration,
                 loss=np.nan, metric_value=np.nan, metric_score=np.nan, extra_metric=np.nan,
                 rounds_so_far=rounds_so_far - 1, comm_down=comm_down, comm_up=0,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
                 payload=None, extras={},
             )
 
@@ -165,6 +187,8 @@ class RegressionStrategy(TaskStrategy):
             except Exception:
                 pass
         start = time.time()
+        tracker = ResourceTracker()
+        tracker.start()
         try:
             weights = train_local_model(
                 local_model, x, y,
@@ -172,6 +196,7 @@ class RegressionStrategy(TaskStrategy):
                 batch_size=self.knobs["batch_size"],
             )
             duration = time.time() - start
+            usage = tracker.stop(duration)
             loss, metric_value, extra_metric = evaluate_model(local_model, self.x_test, self.y_test, task_type="regression")
             mscore = metric_score_value("regression", metric_value)
 
@@ -183,14 +208,23 @@ class RegressionStrategy(TaskStrategy):
                 participated=True, fail_reason="", samples_count=samples_count, duration=duration,
                 loss=loss, metric_value=metric_value, metric_score=mscore, extra_metric=extra_metric,
                 rounds_so_far=rounds_so_far, comm_down=comm_down, comm_up=weights_size(weights),
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
                 payload=weights, extras={},
             )
         except Exception:
             duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
             return ClientOutcome(
                 participated=False, fail_reason="error", samples_count=samples_count, duration=duration,
                 loss=np.nan, metric_value=np.nan, metric_score=np.nan, extra_metric=np.nan,
                 rounds_so_far=rounds_so_far - 1, comm_down=comm_down, comm_up=0,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
                 payload=None, extras={},
             )
 
@@ -218,48 +252,67 @@ class ClusteringStrategy(TaskStrategy):
         # local-only KMeans adapter path
         X = x
         t0 = time.time()
-        local_model = self.build_model()  # returns KMeansAdapter
-        local_model.fit(X)
-        duration = time.time() - t0
-
-        # evaluate on test set
+        tracker = ResourceTracker()
+        tracker.start()
         try:
-            loss, sil, inertia = local_model.evaluate(self.x_test)
-        except Exception:
-            loss, sil, inertia = (np.nan, np.nan, np.nan)
+            local_model = self.build_model()  # returns KMeansAdapter
+            local_model.fit(X)
+            duration = time.time() - t0
+            usage = tracker.stop(duration)
 
-        # optional ARI/NMI when labels exist
-        ari = nmi = np.nan
-        try:
-            if self.y_test is not None:
-                from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
-                preds = local_model.predict(self.x_test)
-                if preds.shape[0] == self.y_test.shape[0]:
-                    ari = float(adjusted_rand_score(self.y_test, preds))
-                    nmi = float(normalized_mutual_info_score(self.y_test, preds))
-        except Exception:
-            pass
+            try:
+                loss, sil, inertia = local_model.evaluate(self.x_test)
+            except Exception:
+                loss, sil, inertia = (np.nan, np.nan, np.nan)
+            ari = nmi = np.nan
 
-        try:
-            comm_up = weights_size(local_model.get_weights())
-        except Exception:
-            comm_up = 0
+            try:
+                if self.y_test is not None:
+                    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+                    preds = local_model.predict(self.x_test)
+                    if preds.shape[0] == self.y_test.shape[0]:
+                        ari = float(adjusted_rand_score(self.y_test, preds))
+                        nmi = float(normalized_mutual_info_score(self.y_test, preds))
+            except Exception:
+                pass
 
-        mscore = metric_score_value("clustering", sil)
-        return ClientOutcome(
-            participated=True, fail_reason="", samples_count=len(X), duration=duration,
-            loss=np.nan, metric_value=sil, metric_score=mscore, extra_metric=inertia,
-            rounds_so_far=rounds_so_far, comm_down=comm_down, comm_up=comm_up,
-            payload=None,
-            extras={
-                "silhouette": sil,
-                "inertia": inertia,
-                "ari": ari,
-                "nmi": nmi,
-                "clustering_k": getattr(local_model, "k", np.nan),
-                "clustering_agg": "local_only",
-            },
-        )
+            try:
+                comm_up = weights_size(local_model.get_weights())
+            except Exception:
+                comm_up = 0
+
+            mscore = metric_score_value("clustering", sil)
+            return ClientOutcome(
+                participated=True, fail_reason="", samples_count=len(X), duration=duration,
+                loss=np.nan, metric_value=sil, metric_score=mscore, extra_metric=inertia,
+                rounds_so_far=rounds_so_far, comm_down=comm_down, comm_up=comm_up,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
+                payload=None,
+                extras={
+                    "silhouette": sil,
+                    "inertia": inertia,
+                    "ari": ari,
+                    "nmi": nmi,
+                    "clustering_k": getattr(local_model, "k", np.nan),
+                    "clustering_agg": "local_only",
+                },
+            )
+        except Exception:
+            duration = time.time() - t0
+            usage = tracker.stop(duration or 1e-9)
+            return ClientOutcome(
+                participated=False, fail_reason="error", samples_count=len(X), duration=duration,
+                loss=np.nan, metric_value=np.nan, metric_score=np.nan, extra_metric=np.nan,
+                rounds_so_far=rounds_so_far - 1, comm_down=comm_down, comm_up=0,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
+                payload=None, extras={},
+            )
 
     def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
         try:

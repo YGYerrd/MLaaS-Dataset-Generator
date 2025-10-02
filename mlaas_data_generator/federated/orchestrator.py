@@ -9,6 +9,7 @@ from ..data.splitters import split_data
 from ..data.distributions import get_data_distribution
 from ..storage.writer import make_writer
 from .task import make_task_strategy
+from .system_metrics import capture_hardware_snapshot, summarize_round_usage
 
 from .records import (
     build_run_meta,
@@ -154,6 +155,8 @@ class FederatedDataGenerator:
         # build global model via strategy
         global_model = self.strategy.build_model()
 
+        hardware_snapshot = capture_hardware_snapshot()
+
         run_meta = build_run_meta(
             run_id=str(uuid.uuid4()),
             dataset=self.dataset,
@@ -163,6 +166,7 @@ class FederatedDataGenerator:
             knobs=self.knobs,
             params_count=int(global_model.count_params()),
             metric_name=self.metric_key,
+            hardware_snapshot=hardware_snapshot
         )
 
         db_path = self.config.get("db_path", "federated.db")
@@ -177,6 +181,8 @@ class FederatedDataGenerator:
                 round_idx = round_num + 1
                 print(f"--- Round {round_idx} ---")
                 client_weights = []
+                round_metrics = []
+                skipped_clients = 0
 
                 # bytes to broadcast down: size of global weights (strategy computes)
                 down_bytes = self.strategy.comm_down_bytes(global_model)
@@ -197,6 +203,7 @@ class FederatedDataGenerator:
                         )
                         writer.write_client_round(row)
                         print(f"{client_id} dropped out ")
+                        skipped_clients += 1
                         continue
 
                     # train client via strategy
@@ -223,6 +230,20 @@ class FederatedDataGenerator:
                         task_type=self.task_type,
                     )
                     writer.write_client_round(row)
+
+                    round_metrics.append(
+                        {
+                            "participated": bool(outcome.participated),
+                            "duration": outcome.duration,
+                            "cpu_utilization": outcome.cpu_utilization,
+                            "memory_utilization": outcome.memory_utilization,
+                            "memory_used_mb": outcome.memory_used_mb,
+                            "gpu_utilization": outcome.gpu_utilization,
+                            "gpu_memory_utilization": outcome.gpu_memory_utilization,
+                            "gpu_memory_used_mb": outcome.gpu_memory_used_mb,
+                            "cpu_time_s": outcome.cpu_time_s,
+                        }
+                    )
                     
                     if outcome.participated:
                         participated_counts[client_id] = next_rounds_so_far
@@ -240,6 +261,12 @@ class FederatedDataGenerator:
                     y_test=self.y_test,
                 )
 
+                round_usage_summary = summarize_round_usage(
+                    round_metrics,
+                    scheduled_clients=len(clients),
+                    skipped_clients=skipped_clients,
+                )
+
                 writer.write_round(
                     build_round_record(
                         run_meta,
@@ -248,6 +275,7 @@ class FederatedDataGenerator:
                         global_metric=global_metric,
                         global_score=global_score,
                         global_extra=global_extra,
+                        resource_summary=round_usage_summary
                     )
                 )
 

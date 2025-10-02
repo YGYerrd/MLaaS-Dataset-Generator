@@ -13,7 +13,7 @@ def _nan_or(v):
     except Exception:
         return None
     
-def build_run_meta(run_id, dataset, task_type, model_type, split_meta, knobs, params_count, metric_name):
+def build_run_meta(run_id, dataset, task_type, model_type, split_meta, knobs, params_count, metric_name, hardware_snapshot):
     return {
         "run_id": run_id,
         "dataset": dataset,
@@ -32,6 +32,7 @@ def build_run_meta(run_id, dataset, task_type, model_type, split_meta, knobs, pa
         "epochs_per_round": knobs["local_epochs"],
         "metric_name": metric_name,
         "distribution_bins": knobs["distribution_bins"],
+        "hardware_snapshot": hardware_snapshot
     }
 
 def build_run_record(run_meta, knobs, config):
@@ -70,19 +71,41 @@ def build_run_record(run_meta, knobs, config):
 
         "save_weights": 1 if config.get("save_weights", False) else 0,
         "dataset_args_json": json.dumps(config.get("dataset_args", {}) or {}),
+        "hardware_snapshot_json": json.dumps(run_meta.get("hardware_snapshot") or {})
     }
 
 
-def build_round_record(run_meta, round_idx, loss, global_metric, global_score, global_extra):
+def build_round_record(run_meta, round_idx, loss, global_metric, global_score, global_extra, resource_summary=None):
+    summary = resource_summary or {}
     return {
         "run_id": run_meta["run_id"],
         "round": int(round_idx),
         "global_loss": _nan_or(loss),
         "global_metric": _nan_or(global_metric),
-        "global_metric_name": run_meta.get("metric_name"),   # 'accuracy'|'rmse'|'silhouette'
-        "global_aux_metric": _nan_or(global_extra),          # e.g. f1 or inertia
+        "global_metric_name": run_meta.get("metric_name"),
+        "global_aux_metric": _nan_or(global_extra),
         "global_score": _nan_or(global_score),
         "frontier_json": None,
+        "scheduled_clients": summary.get("scheduled_clients"),
+        "attempted_clients": summary.get("attempted_clients"),
+        "participating_clients": summary.get("participating_clients"),
+        "dropped_clients": summary.get("dropped_clients"),
+        "avg_client_duration": _nan_or(summary.get("avg_client_duration")),
+        "max_client_duration": _nan_or(summary.get("max_client_duration")),
+        "avg_cpu_util": _nan_or(summary.get("avg_cpu_util")),
+        "max_cpu_util": _nan_or(summary.get("max_cpu_util")),
+        "avg_memory_util": _nan_or(summary.get("avg_memory_util")),
+        "max_memory_util": _nan_or(summary.get("max_memory_util")),
+        "avg_memory_used_mb": _nan_or(summary.get("avg_memory_used_mb")),
+        "max_memory_used_mb": _nan_or(summary.get("max_memory_used_mb")),
+        "avg_gpu_util": _nan_or(summary.get("avg_gpu_util")),
+        "max_gpu_util": _nan_or(summary.get("max_gpu_util")),
+        "avg_gpu_memory_util": _nan_or(summary.get("avg_gpu_memory_util")),
+        "max_gpu_memory_util": _nan_or(summary.get("max_gpu_memory_util")),
+        "avg_gpu_memory_used_mb": _nan_or(summary.get("avg_gpu_memory_used_mb")),
+        "max_gpu_memory_used_mb": _nan_or(summary.get("max_gpu_memory_used_mb")),
+        "avg_cpu_time_s": _nan_or(summary.get("avg_cpu_time_s")),
+        "max_cpu_time_s": _nan_or(summary.get("max_cpu_time_s")),
     }
 
 def build_client_record(run_meta, round_idx, client_id, distribution, metric_key, outcome, task_type):
@@ -142,6 +165,14 @@ def build_client_record(run_meta, round_idx, client_id, distribution, metric_key
         "nmi": _nan_or(extras.get("nmi")),
         "clustering_k": extras.get("clustering_k"),
         "clustering_agg": extras.get("clustering_agg"),
+        
+        "cpu_time_s": _nan_or(outcome.cpu_time_s),
+        "cpu_utilization": _nan_or(outcome.cpu_utilization),
+        "memory_used_mb": _nan_or(outcome.memory_used_mb),
+        "memory_utilization": _nan_or(outcome.memory_utilization),
+        "gpu_utilization": _nan_or(outcome.gpu_utilization),
+        "gpu_memory_used_mb": _nan_or(outcome.gpu_memory_used_mb),
+        "gpu_memory_utilization": _nan_or(outcome.gpu_memory_utilization),
 
         "availability_flag": 1 if outcome.participated else 0,
     }
@@ -183,6 +214,14 @@ def build_skip_record(run_meta, round_idx, client_id, distribution, samples_coun
         "nmi": None,
         "clustering_k": None,
         "clustering_agg": None,
+        
+        "cpu_time_s": None,
+        "cpu_utilization": None,
+        "memory_used_mb": None,
+        "memory_utilization": None,
+        "gpu_utilization": None,
+        "gpu_memory_used_mb": None,
+        "gpu_memory_utilization": None,
 
         "availability_flag": 0,
     }

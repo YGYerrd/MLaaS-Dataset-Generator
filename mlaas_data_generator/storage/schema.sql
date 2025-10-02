@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS runs (
   clustering_tol      REAL,
 
   -- misc
-  dataset_args_json   TEXT
+  dataset_args_json   TEXT,
+  hardware_snapshot_json TEXT
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_dataset       ON runs(dataset);
@@ -62,6 +64,26 @@ CREATE TABLE IF NOT EXISTS rounds (
   global_aux_metric   REAL,            -- e.g., f1 or inertia
   global_score        REAL,
   frontier_json       TEXT,
+  scheduled_clients   INTEGER,
+  attempted_clients   INTEGER,
+  participating_clients INTEGER,
+  dropped_clients     INTEGER,
+  avg_client_duration REAL,
+  max_client_duration REAL,
+  avg_cpu_util        REAL,
+  max_cpu_util        REAL,
+  avg_memory_util     REAL,
+  max_memory_util     REAL,
+  avg_memory_used_mb  REAL,
+  max_memory_used_mb  REAL,
+  avg_gpu_util        REAL,
+  max_gpu_util        REAL,
+  avg_gpu_memory_util REAL,
+  max_gpu_memory_util REAL,
+  avg_gpu_memory_used_mb REAL,
+  max_gpu_memory_used_mb REAL,
+  avg_cpu_time_s      REAL,
+  max_cpu_time_s      REAL,
   PRIMARY KEY (run_id, round),
   FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
@@ -105,7 +127,14 @@ CREATE TABLE IF NOT EXISTS client_rounds (
   nmi                          REAL,
   clustering_k                 INTEGER,
   clustering_agg               TEXT,
-  
+
+  cpu_time_s                   REAL,
+  cpu_utilization              REAL,
+  memory_used_mb               REAL,
+  memory_utilization           REAL,
+  gpu_utilization              REAL,
+  gpu_memory_used_mb           REAL,
+  gpu_memory_utilization       REAL,
   availability_flag            INTEGER,  -- 0/1
   PRIMARY KEY (run_id, round, client_id),
   FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE

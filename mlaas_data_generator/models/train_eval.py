@@ -1,6 +1,14 @@
 from __future__ import annotations
 import numpy as np
 
+try:
+    from sklearn.exceptions import NotFittedError
+except Exception:  # pragma: no cover - sklearn may not be installed in some envs
+    class NotFittedError(Exception):
+        """Fallback NotFittedError when sklearn is unavailable."""
+        pass
+
+
 def train_local_model(model, x, y, epochs=1, batch_size=32):
     model.fit(x, y, epochs=epochs, batch_size=batch_size, verbose=0)
     if hasattr(model, "get_weights"):
@@ -25,7 +33,12 @@ def aggregate_weights(client_weights):
 
 def evaluate_model(model, x_test, y_test, task_type="classification"):
     if hasattr(model, "evaluate"):
-        results = model.evaluate(x_test, y_test, verbose=0)
+        try:
+            results = model.evaluate(x_test, y_test, verbose=0)
+        except NotFittedError:
+            if task_type == "regression":
+                return np.nan, np.nan, None
+            return np.nan, np.nan, np.nan
         if isinstance(results, (list, tuple)):
             loss = float(results[0])
             metric = float(results[1]) if len(results) > 1 else float(results[0])
@@ -33,14 +46,22 @@ def evaluate_model(model, x_test, y_test, task_type="classification"):
             loss = float(results); metric = float(results)
         if task_type == "regression":
             return loss, metric, None
-        y_pred = model.predict(x_test, verbose=0)
+        try:
+            y_pred = model.predict(x_test, verbose=0)
+        except NotFittedError:
+            return loss, metric, np.nan
         y_pred_classes = y_pred.argmax(axis=1)  # Keras softmax path
         f1 = _macro_f1(y_test, y_pred_classes)
         return loss, metric, f1
 
     # Adapter path
     from sklearn.metrics import accuracy_score, f1_score, mean_squared_error
-    y_pred = model.predict(x_test)
+    try:
+        y_pred = model.predict(x_test)
+    except NotFittedError:
+        if task_type == "regression":
+            return np.nan, np.nan, None
+        return np.nan, np.nan, np.nan
     if task_type == "regression":
         mse = float(mean_squared_error(y_test, y_pred))
         rmse = float(np.sqrt(mse))

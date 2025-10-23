@@ -1,10 +1,12 @@
 {
-  "num_clients": 20,
-  "num_rounds": 5,
-  "local_epochs": 1,
-  "batch_size": null,
-  "learning_rate": null,
-  "hidden_layers": [],
+  "num_clients": 10,
+  "num_rounds": 10,
+  "local_epochs": 5,
+  "batch_size": 64,
+  "learning_rate": 0.001,
+  "hidden_layers": [
+    128
+  ],
   "activation": "relu",
   "dropout": 0.0,
   "weight_decay": 0.0,
@@ -14,7 +16,7 @@
   "sample_size": null,
   "sample_frac": null,
   "model_type": "mlp",
-  "task_type": "clustering",
+  "task_type": "classification",
   "client_dropout_rate": 0.0,
   "save_weights": false,
   "dataset": "iris",

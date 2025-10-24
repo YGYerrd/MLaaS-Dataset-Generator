@@ -109,7 +109,7 @@ def build_structured_plan(total_runs, task_counts, rng):
                     perm = list(rng.permutation(len(dist_choices)))
                     dist_choices = [dist_choices[int(i)] for i in perm]
                 dist_choices = dist_choices[:min(2, len(dist_choices))]
-                optimizers = ["adam", "sgd"]
+                optimizers = ["adam", "sgd", "rmsprop", "adagrad", "adamw"]
                 for i in range(model_count):
                     dist = dist_choices[i % len(dist_choices)]
                     plan.append({

@@ -26,6 +26,12 @@ def _is_keras_like(m) -> bool:
     return hasattr(m, "get_weights") and callable(getattr(m, "get_weights", None)) \
         and hasattr(m, "set_weights") and callable(getattr(m, "set_weights", None))
 
+def _nanmean(values):
+    cleaned = [float(v) for v in values if v is not None and not np.isnan(float(v))]
+    if not cleaned:
+        return np.nan
+    return float(np.mean(cleaned))
+
 @dataclass
 class ClientOutcome:
     participated: bool
@@ -96,7 +102,7 @@ class TaskStrategy:
         
     def task_type(self) -> str: ...
     def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down) -> ClientOutcome: ...
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
+    def aggregate_and_eval(self, global_model, client_payloads, client_outcomes, round_idx, x_train, x_test, y_test):
         """Return (loss, metric_value, metric_score, extra_metric)."""
         ...
 
@@ -158,7 +164,8 @@ class ClassificationStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test,):
+    def aggregate_and_eval(self, global_model, client_payloads, client_outcomes, round_idx, x_train, x_test, y_test,):
+        participated = [o for o in (client_outcomes or []) if getattr(o, "participated", False)]
         if client_payloads:
             new_global_weights = aggregate_weights(client_payloads)
             # Keep parity with your existing set_weights(list_ordered)
@@ -167,7 +174,13 @@ class ClassificationStrategy(TaskStrategy):
                 with open(f"weights/global_round_{round_idx}.json", "w") as f:
                     json.dump({k: np.asarray(v).tolist() for k, v in new_global_weights.items()}, f, indent=4)
         else:
-            print("No participating clients this round; keeping previous global weights.")
+            print("No participating clients provided weights; using client metrics fallback.")
+            if participated:
+                loss = _nanmean([o.loss for o in participated])
+                metric_value = _nanmean([o.metric_value for o in participated])
+                extra_metric = _nanmean([o.extra_metric for o in participated])
+                mscore = metric_score_value("classification", metric_value)
+                return loss, metric_value, mscore, extra_metric
 
         loss, metric_value, extra_metric = evaluate_model(global_model, x_test, y_test, task_type="classification")
         mscore = metric_score_value("classification", metric_value)
@@ -228,7 +241,8 @@ class RegressionStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test,):
+    def aggregate_and_eval(self, global_model, client_payloads, client_outcomes, round_idx, x_train, x_test, y_test,):
+        participated = [o for o in (client_outcomes or []) if getattr(o, "participated", False)]
         if client_payloads:
             new_global_weights = aggregate_weights(client_payloads)
             # Keep parity with your existing set_weights(list_ordered)
@@ -237,7 +251,15 @@ class RegressionStrategy(TaskStrategy):
                 with open(f"weights/global_round_{round_idx}.json", "w") as f:
                     json.dump({k: np.asarray(v).tolist() for k, v in new_global_weights.items()}, f, indent=4)
         else:
-            print("No participating clients this round; keeping previous global weights.")
+            print("No participating clients provided weights; using client metrics fallback.")
+            if participated:
+                loss = _nanmean([o.loss for o in participated])
+                metric_value = _nanmean([o.metric_value for o in participated])
+                extra_metric = _nanmean([o.extra_metric for o in participated])
+                mscore = metric_score_value("regression", metric_value)
+                return loss, metric_value, mscore, extra_metric
+        
+        print(f"[DEBUG] Model compiled: {hasattr(global_model, 'optimizer') and global_model.optimizer is not None}")
 
         loss, metric_value, extra_metric = evaluate_model(global_model, x_test, y_test, task_type="regression")
         mscore = metric_score_value("regression", metric_value)
@@ -314,17 +336,29 @@ class ClusteringStrategy(TaskStrategy):
                 payload=None, extras={},
             )
 
-    def aggregate_and_eval(self, global_model, client_payloads, round_idx, x_train, x_test, y_test):
-        try:
-            tmp = self.build_model()   # fresh adapter with same knobs
-            tmp.fit(x_train)           # fit on full training set
-            _, sil, inertia = tmp.evaluate(x_test)
-        except Exception:
-            sil, inertia = (np.nan, np.nan)
+    def aggregate_and_eval(self, global_model, client_payloads, client_outcomes, round_idx, x_train, x_test, y_test):
+        participated = [o for o in (client_outcomes or []) if getattr(o, "participated", False)]
 
+        if participated:
+            sil = _nanmean([o.metric_value for o in participated])
+            inertia = _nanmean([o.extra_metric for o in participated])
+        else:
+            try:
+                tmp = self.build_model()   # fresh adapter with same knobs
+                tmp.fit(x_train)           # fit on full training set
+                _, sil, inertia = tmp.evaluate(x_test)
+            except Exception:
+                sil, inertia = (np.nan, np.nan)
+
+        # Map silhouette to a score (just identity for clustering)
         mscore = metric_score_value("clustering", sil)
-        # loss is not meaningful for silhouette; return NaN for consistency
-        return np.nan, sil, mscore, inertia
+
+        # The ‘loss’ concept doesn’t exist for clustering, so use NaN
+        loss = np.nan
+        # Bundle inertia as auxiliary info
+        global_extra = {"inertia": inertia}
+
+        return loss, sil, mscore, global_extra
 
 # -------------------- factory --------------------
 

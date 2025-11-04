@@ -7,12 +7,15 @@ import tensorflow as tf
 from .adapters import KMeansAdapter, make_random_forest
 
 def _make_optimizer(name: str, lr: float):
+    if name is None or name.lower() == "none" or lr is None:
+        return None
     name = name.lower()
     if name == "sgd":     return optimizers.SGD(learning_rate=lr, momentum=0.0)
     if name == "rmsprop": return optimizers.RMSprop(learning_rate=lr)
     if name == "adagrad": return optimizers.Adagrad(learning_rate=lr)
     if name == "adamw":   return optimizers.AdamW(learning_rate=lr)
     return optimizers.Adam(learning_rate=lr)
+
 
 def create_model(
     input_shape,
@@ -26,7 +29,8 @@ def create_model(
     task_type: str = "classification",
     model_type: str | None = None,
     **kwargs
-):
+): 
+
     l2 = regularizers.l2(weight_decay) if weight_decay > 0 else None
     rank = len(input_shape)
     model_choice = (model_type or ("cnn" if rank == 3 else "mlp")).lower()
@@ -107,5 +111,7 @@ def create_model(
         raise ValueError(f"Unsupported input_shape {input_shape}; rank {rank} not handled.")
 
     opt = _make_optimizer(optimizer, learning_rate)
-    model.compile(optimizer=opt, loss=loss, metrics=metrics)
+    if opt is not None:
+        model.compile(optimizer=opt, loss=loss, metrics=metrics)
+
     return model

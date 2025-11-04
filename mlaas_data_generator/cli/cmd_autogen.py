@@ -9,7 +9,7 @@ from ..federated.orchestrator import FederatedDataGenerator
 # --------------------------
 # Study spec (datasets & compat)
 # --------------------------
-IMG_CLASS_DATASETS = ["mnist", "fashion_mnist", "cifar10"]
+IMG_CLASS_DATASETS = ["mnist", "fashion_mnist"]
 TAB_CLASS_DATASETS = ["digits", "iris", "wine"]
 REGRESSION_DATASETS = ["california_housing", "diabetes"]
 ALL_DATASETS = IMG_CLASS_DATASETS + TAB_CLASS_DATASETS + REGRESSION_DATASETS
@@ -22,7 +22,6 @@ COMPAT = {
 
 MODEL_MAP = {
     "cnn": "cnn",
-    "mobilenetv2": "mobilenetv2",
     "mlp": "mlp",
     "logreg": "logreg",
     "randomforest": "randomforest",
@@ -57,15 +56,21 @@ def _dataset_modality(dataset):
 def _allowed_models(task, dataset):
     modality = _dataset_modality(dataset)
     if task == "clustering":
-        return ["mlp"]  # clustering uses adapter; metadata-only
+        return ["kmeans"]  # clustering uses adapter; metadata-only
     if task == "regression":
         return ["mlp", "randomforest"] if modality == "tabular" else ["mlp"]
     if modality == "image":
-        return ["cnn", "mobilenetv2", "mlp"]
+        return ["cnn", "mlp"]
     return ["mlp", "randomforest", "logreg"]
 
-def _task_distributions(task):
-    return ["iid", "quantity_skew"] if task == "regression" else ["iid", "dirichlet", "quantity_skew", "shard"]
+def _task_distributions(task, dataset=None):
+    if dataset in ["iris", "wine", "digits"]:
+        return ["iid", "dirichlet", "quantity_skew"]
+    if dataset in ["mnist", "fashion_mnist", "cifar10"]:
+        return ["iid", "dirichlet", "quantity_skew", "shard"]
+    if task == "regression":
+        return ["iid", "quantity_skew"]
+    return ["iid", "dirichlet"]
 
 def _distribute_evenly(total, items, rng):
     if not items or total <= 0:
@@ -144,6 +149,8 @@ def sample_distribution_knobs(task, rng):
 
 def sample_common_federated_knobs(task, dataset, rng):
     num_clients = int(_pick([5, 10, 20, 50], rng, p=[0.15, 0.45, 0.35, 0.05]))
+    if dataset in ["digits", "iris", "wine"]:
+        num_clients = min(num_clients, 5)
     if task == "clustering":
         num_rounds = int(_pick([5, 10], rng, p=[0.5, 0.5]))
     else:
@@ -169,9 +176,9 @@ def sample_model_and_training(task, dataset, rng):
 
     if task == "classification" and dataset in IMG_CLASS_DATASETS:
         if dataset == "cifar10":
-            model_type = _pick(["mobilenetv2", "cnn", "mlp"], rng, p=[0.6, 0.35, 0.05])
+            model_type = _pick(["cnn", "mlp"], rng, p=[0.8, 0.2])
         else:
-            model_type = _pick(["cnn", "mlp", "mobilenetv2"], rng, p=[0.7, 0.2, 0.1])
+            model_type = _pick(["cnn", "mlp"], rng, p=[0.7, 0.3])
         lr = _log_uniform(rng, 1e-4, 3e-3) if optimizer in {"adam", "rmsprop"} else _log_uniform(rng, 3e-4, 3e-2)
         if model_type == "mlp":
             depth = int(_pick([1, 2, 3], rng, p=[0.5, 0.35, 0.15]))
@@ -188,13 +195,16 @@ def sample_model_and_training(task, dataset, rng):
 
     if task == "regression":
         model_type = _pick(["randomforest", "mlp"], rng, p=[0.5, 0.5])
+        lr = None
         if model_type == "mlp":
-            lr = _log_uniform(rng, 1e-4, 1e-1)
+            lr = float(_log_uniform(rng, 1e-4, 1e-1))
             depth = int(_pick([1, 2, 3], rng, p=[0.5, 0.35, 0.15]))
             hidden_layers = [int(_pick([64, 128, 256], rng)) for _ in range(depth)]
         else:
-            lr = None
-        return MODEL_MAP[model_type], (None if model_type == "randomforest" else float(lr)), optimizer, activation, hidden_layers, float(dropout), float(weight_decay)
+            optimizer = "none"
+        if lr is None and optimizer.lower() in {"adam", "rmsprop", "sgd"}:
+            lr = 0.001
+        return MODEL_MAP[model_type], (None if model_type == "randomforest" else float( lr)), optimizer, activation, hidden_layers, float(dropout), float(weight_decay)
 
     model_type = "mlp"  # clustering metadata
     lr = 1e-3
@@ -238,7 +248,7 @@ def compose_config(dataset, task, rng):
     dataset_args = sample_dataset_args(task, dataset, rng)
 
     sample_size = None
-    sample_frac = (0.25 if rng.uniform() < 0.08 else (0.5 if rng.uniform() < 0.04 else None))
+    sample_frac = None if dataset in ["digits", "iris", "wine"] else int(_pick([1, 0.8, 0.6], rng, p= (0.34, 0.33, 0.33)))
 
     cfg = {
         "dataset": dataset,

@@ -2,18 +2,27 @@ from __future__ import annotations
 import numpy as np
 
 def apply_feature_scaler(x_train, x_test, scaler):
-    if not scaler:
+    if scaler is None:
+        normalized_scaler = None
+    elif isinstance(scaler, str):
+        normalized_scaler = scaler.strip().lower()
+        if normalized_scaler in {"", "none"}:
+            normalized_scaler = None
+    else:
+        normalized_scaler = scaler
+
+    if not normalized_scaler:
         return x_train.astype("float32"), x_test.astype("float32"), None
-    if scaler == "standard":
+    if normalized_scaler == "standard":
         from sklearn.preprocessing import StandardScaler as S
-    elif scaler == "minmax":
+    elif normalized_scaler == "minmax":
         from sklearn.preprocessing import MinMaxScaler as S
     else:
         raise ValueError(f"Unknown scaler: {scaler}")
     s = S()
     x_train = s.fit_transform(x_train).astype("float32")
     x_test  = s.transform(x_test).astype("float32")
-    return x_train, x_test, scaler
+    return x_train, x_test, normalized_scaler
 
 
 def apply_target_scaler(y_train, y_test, method: str | None):

@@ -113,6 +113,7 @@ class FederatedDataGenerator:
             "sample_size": self.config.get("sample_size", None),
             "sample_frac": self.config.get("sample_frac", None),
             "distribution_bins": self.distribution_bins,
+            "early_stopping_patience": self.config.get("early_stopping_patience")
         }
 
         self.rng = np.random.default_rng(self.config.get("seed", 42))
@@ -129,9 +130,24 @@ class FederatedDataGenerator:
             save_weights=self.save_weights,
         )
 
+        # --- Disable multi-round training for non-federated models
+        if self.task_type == "clustering" or self.model_type.lower() == "randomforest":
+            print(f"Non-federated model detected ({self.model_type}); forcing single-round training.")
+            self.knobs["num_rounds"] = 1
+
     def run(self):
         os.makedirs("weights", exist_ok=True)
-
+        patience_cfg = self.config.get("early_stopping_patience")
+        if patience_cfg in (None, "", False):
+            early_stopping_patience = None
+        else:
+            try:
+                early_stopping_patience = int(patience_cfg)
+            except (TypeError, ValueError):
+                early_stopping_patience = None
+            else:
+                if early_stopping_patience <= 0:
+                    early_stopping_patience = None
         if self.task_type == "regression" and self.knobs["distribution_type"] in {"dirichlet", "shard", "label_per_client"}:
             print("Warning: label-based partitioning not supported for regression; using 'iid'.")
             self.knobs["distribution_type"] = "iid"
@@ -145,9 +161,22 @@ class FederatedDataGenerator:
             sample_frac=self.knobs["sample_frac"],
             rng=self.rng
         )
-
-        print(f"\nUsing split strategy: {split_info['strategy']} | params: {split_info['distribution_param']}\n")
-        print(f"Using Dataset: {self.dataset}\n")
+        print("\n========== RUN CONFIGURATION SUMMARY ==========")
+        for key, val in sorted(self.config.items()):
+            print(f"{key:25}: {val}")
+        print("------------------------------------------------")
+        print("Derived knobs:")
+        for key, val in sorted(self.knobs.items()):
+            print(f"{key:25}: {val}")
+        print("------------------------------------------------")
+        print(f"Dataset:         {self.dataset}")
+        print(f"Model Type:      {self.model_type}")
+        print(f"Task Type:       {self.task_type}")
+        print(f"Input Shape:     {self.input_shape}")
+        print(f"Num Classes:     {self.num_classes}")
+        print(f"Save Weights:    {self.save_weights}")
+        print(f"Distribution Bins: {self.distribution_bins}")
+        print("================================================\n")
         print("Client data distributions before training:")
         for client_id, data in clients.items():
             print(f"{client_id}: {get_data_distribution(data['y'], self.num_classes, bins=self.knobs.get('distribution_bins'), value_range=self.distribution_range)}")
@@ -181,6 +210,7 @@ class FederatedDataGenerator:
                 round_idx = round_num + 1
                 print(f"--- Round {round_idx} ---")
                 client_payloads = []
+                client_outcomes = []
                 round_metrics = []
                 skipped_clients = 0
 
@@ -230,7 +260,7 @@ class FederatedDataGenerator:
                         task_type=self.task_type,
                     )
                     writer.write_client_round(row)
-
+                    client_outcomes.append(outcome)
                     round_metrics.append(
                         {
                             "participated": bool(outcome.participated),
@@ -255,6 +285,7 @@ class FederatedDataGenerator:
                 loss, global_metric, global_score, global_extra = self.strategy.aggregate_and_eval(
                     global_model=global_model,
                     client_payloads=client_payloads,
+                    client_outcomes=client_outcomes,
                     round_idx=round_idx,
                     x_train=self.x_train,
                     x_test=self.x_test,

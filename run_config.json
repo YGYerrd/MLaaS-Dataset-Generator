@@ -1,6 +1,6 @@
 {
-  "num_clients": 10,
-  "num_rounds": 10,
+  "num_clients": 20,
+  "num_rounds": 20,
   "local_epochs": 5,
   "batch_size": 64,
   "learning_rate": 0.001,
@@ -15,15 +15,17 @@
   "distribution_param": null,
   "sample_size": null,
   "sample_frac": null,
-  "model_type": "mlp",
-  "task_type": "classification",
+  "model_type": "randomforest",
+  "task_type": "regression",
   "client_dropout_rate": 0.0,
   "save_weights": false,
-  "dataset": "iris",
+  "dataset": "california_housing",
   "dataset_args": {
     "test_size": 0.2,
-    "seed": 42,
-    "scaler": "standard"
+    "seed": 113,
+    "scaler": "standard",
+    "y_standardize": true
   },
-  "distribution_bins": 10
+  "distribution_bins": 10,
+  "early_stopping_patience": 3
 }

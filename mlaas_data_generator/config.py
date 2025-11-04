@@ -31,5 +31,6 @@ CONFIG = {
     "client_dropout_rate": 0.0,
     "task_type": "classification",
     "distribution_bins": 10,
-    "dataset_args": None
+    "dataset_args": None,
+    "early_stopping_patience": None
 }

@@ -2,5 +2,4 @@ venv/
 __pycache__/
 weights/
 mlaas_data_generator/config.py
-outputs/
 run_config.json

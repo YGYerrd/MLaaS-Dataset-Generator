@@ -3,14 +3,21 @@ import numpy as np
 
 try:
     from sklearn.exceptions import NotFittedError
-except Exception:  # pragma: no cover - sklearn may not be installed in some envs
+except Exception:
     class NotFittedError(Exception):
         """Fallback NotFittedError when sklearn is unavailable."""
         pass
 
 
-def train_local_model(model, x, y, epochs=1, batch_size=32):
-    model.fit(x, y, epochs=epochs, batch_size=batch_size, verbose=0)
+def train_local_model(model, x, y, epochs=1, batch_size=32, lr=None):
+    try:
+        model.fit(x, y, epochs=epochs, batch_size=batch_size, verbose=0)
+    except TypeError:
+        if lr is None:
+            model.fit(x, y, epochs=epochs, batch_size=batch_size)
+        else:
+            model.fit(x, y, epochs=epochs, batch_size=batch_size, lr=lr)
+
     if hasattr(model, "get_weights"):
         try:
             weights = model.get_weights()
@@ -31,45 +38,92 @@ def aggregate_weights(client_weights):
         aggregated[layer] = np.mean([w[layer] for w in client_weights], axis=0)
     return aggregated
 
+def aggregate_state_dict(payloads, weights=None):
+    """
+    payloads: list[dict[str] -> np.ndarray]
+    weights: list[float] (e.g. samples_count) or None -> uniform
+    """
+    if not payloads:
+        return {}
+
+    keys = payloads[0].keys()
+    if weights is None:
+        weights = [1.0] * len(payloads)
+
+    wsum = float(sum(weights)) if sum(weights) != 0 else 1.0
+    weights = [float(w) / wsum for w in weights]
+
+    out = {}
+    for k in keys:
+        acc = None
+        for p, w in zip(payloads, weights):
+            arr = np.asarray(p[k])
+            if acc is None:
+                acc = arr * w
+            else:
+                acc = acc + (arr * w)
+        out[k] = acc
+    return out
+
 def evaluate_model(model, x_test, y_test, task_type="classification"):
     if hasattr(model, "evaluate"):
         try:
-            results = model.evaluate(x_test, y_test, verbose=0)
+            try:
+                results = model.evaluate(x_test, y_test, verbose=0)
+            except TypeError:
+                results = model.evaluate(x_test, y_test)
         except NotFittedError:
-            if task_type == "regression":
-                return np.nan, np.nan, None
             return np.nan, np.nan, np.nan
-        if isinstance(results, (list, tuple)):
-            loss = float(results[0])
-            metric = float(results[1]) if len(results) > 1 else float(results[0])
-        else:
-            loss = float(results); metric = float(results)
-        if task_type == "regression":
-            return loss, metric, None
-        try:
-            y_pred = model.predict(x_test, verbose=0)
-        except NotFittedError:
-            return loss, metric, np.nan
-        y_pred_classes = y_pred.argmax(axis=1)  # Keras softmax path
-        f1 = _macro_f1(y_test, y_pred_classes)
-        return loss, metric, f1
 
-    # Adapter path
+        if isinstance(results, (list, tuple)) and len(results) == 4:
+            loss = float(results[0]) if results[0] is not None else np.nan
+            primary = float(results[1]) if results[1] is not None else np.nan
+            secondary = float(results[2]) if results[2] is not None else np.nan
+            return loss, primary, secondary
+        
+        if isinstance(results, (list, tuple)):
+            loss = float(results[0]) if results else np.nan
+            primary = float(results[1]) if len(results) > 1 else loss
+        else:
+            loss = float(results)
+            primary = float(results)
+
+        if task_type == "regression":
+            return loss, primary, np.nan
+
+        try:
+            try:
+                y_pred = model.predict(x_test, verbose=0)
+            except TypeError:
+                y_pred = model.predict(x_test)
+        except (NotFittedError, AttributeError):
+            return loss, primary, np.nan
+        except Exception:
+            return loss, primary, np.nan
+
+        y_pred = np.asarray(y_pred)
+        y_pred_classes = y_pred if y_pred.ndim == 1 else np.argmax(y_pred, axis=1)
+
+        f1 = _macro_f1(y_test, y_pred_classes)
+        return loss, primary, f1
+
     from sklearn.metrics import accuracy_score, f1_score, mean_squared_error
     try:
         y_pred = model.predict(x_test)
     except NotFittedError:
-        if task_type == "regression":
-            return np.nan, np.nan, None
         return np.nan, np.nan, np.nan
+
     if task_type == "regression":
+        y_pred = np.asarray(y_pred)
         mse = float(mean_squared_error(y_test, y_pred))
         rmse = float(np.sqrt(mse))
-        return mse, rmse, None
-    # classification
-    y_hat = y_pred if np.ndim(y_pred) == 1 else np.argmax(y_pred, axis=1)
+        return rmse, rmse, np.nan
+    y_pred = np.asarray(y_pred)
+    y_hat = y_pred if y_pred.ndim == 1 else np.argmax(y_pred, axis=1)
+
     acc = float(accuracy_score(y_test, y_hat))
     f1m = float(f1_score(y_test, y_hat, average="macro", zero_division=0))
+
     return 1.0 - acc, acc, f1m
 
 

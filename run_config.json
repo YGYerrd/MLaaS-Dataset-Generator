@@ -1,31 +1,26 @@
 {
-  "num_clients": 20,
-  "num_rounds": 20,
-  "local_epochs": 5,
+  "num_clients": 2,
+  "num_rounds": 2,
+  "local_epochs": 15,
   "batch_size": 64,
   "learning_rate": 0.001,
   "hidden_layers": [
+    128,
     128
   ],
   "activation": "relu",
   "dropout": 0.0,
-  "weight_decay": 0.0,
+  "weight_decay": 0.0001,
   "optimizer": "adam",
   "distribution_type": "iid",
   "distribution_param": null,
   "sample_size": null,
   "sample_frac": null,
-  "model_type": "randomforest",
-  "task_type": "regression",
+  "model_type": "cnn",
+  "task_type": "classification",
   "client_dropout_rate": 0.0,
   "save_weights": false,
-  "dataset": "california_housing",
-  "dataset_args": {
-    "test_size": 0.2,
-    "seed": 113,
-    "scaler": "standard",
-    "y_standardize": true
-  },
-  "distribution_bins": 10,
-  "early_stopping_patience": 3
+  "dataset": "mnist",
+  "dataset_args": {},
+  "distribution_bins": 10
 }

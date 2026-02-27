@@ -1,0 +1,30 @@
+{
+  "run_group_id": "20260224_203320",
+  "db_path": "outputs/federated_bench.db",
+  "cases": [
+    {
+      "run_id": "1f0474e1-3e05-4b44-9743-3986d1858918",
+      "db_path": "outputs/federated_bench.db",
+      "rounds": 3,
+      "clients": 3,
+      "run_group_id": "20260224_203320",
+      "case_name": "sst2_distilbert_base"
+    },
+    {
+      "run_id": "cdc14a9a-640c-42cf-b059-66e03ffd0b08",
+      "db_path": "outputs/federated_bench.db",
+      "rounds": 3,
+      "clients": 3,
+      "run_group_id": "20260224_203320",
+      "case_name": "sst2_distilbert_preft"
+    },
+    {
+      "run_id": "eeaf8a50-a485-4003-8586-d437d3a80ad0",
+      "db_path": "outputs/federated_bench.db",
+      "rounds": 3,
+      "clients": 3,
+      "run_group_id": "20260224_203320",
+      "case_name": "ag_news_distilbert_base"
+    }
+  ]
+}

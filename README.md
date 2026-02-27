@@ -73,7 +73,7 @@ cd <repo-name>
 pip install -r requirements.txt
 ```
 
-Python 3.9+ is recommended.
+Python 3.11 is recommended.
 
 ---
 

@@ -45,7 +45,6 @@ class ClientOutcome:
     rounds_so_far: int
     comm_down: int
     comm_up: int
-    comm_up: int
     cpu_time_s: float | None
     cpu_utilization: float | None
     memory_used_mb: float | None
@@ -75,9 +74,23 @@ class TaskStrategy:
                 if key in self.config:
                     extra[key] = self.config[key]
         else:
-            for key in ("rf_trees", "rf_max_depth", "mobilenet_trainable", "n_estimators", "max_depth"):
+            for key in ("rf_trees", "rf_max_depth", "mobilenet_trainable", "n_estimators", "max_depth",
+                        "hf_model_id", "max_length", "device"):
                 if key in self.config:
                     extra[key] = self.config[key]
+
+        if "batch_size" in self.knobs:
+            extra["batch_size"] = self.knobs["batch_size"]
+
+        ds_args = self.config.get("dataset_args", {}) or {}
+
+        for key in ("hf_model_id", "max_length", "device"):
+            if key in ds_args and key not in extra:
+                extra[key] = ds_args[key]
+
+        # HF adapter uses batch_size at construction time
+        if "batch_size" in self.knobs and "batch_size" not in extra:
+            extra["batch_size"] = self.knobs["batch_size"]
 
         return create_model(
             input_shape=tuple(self.meta["input_shape"]),
@@ -150,11 +163,18 @@ class ClassificationStrategy(TaskStrategy):
                 gpu_memory_used_mb=usage.gpu_memory_used_mb,
                 payload=weights, extras={},  # accuracy/f1 added in records builder
             )
-        except Exception:
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[ERROR] {client_id} failed in round {round_idx}: {repr(e)}")
+            print(tb)
+
+            duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
             duration = time.time() - start
             usage = tracker.stop(duration or 1e-9)
             return ClientOutcome(
-                participated=False, fail_reason="error", samples_count=samples_count, duration=duration,
+                participated=False, fail_reason=repr(e), samples_count=samples_count, duration=duration,
                 loss=np.nan, metric_value=np.nan, metric_score=np.nan, extra_metric=np.nan,
                 rounds_so_far=rounds_so_far - 1, comm_down=comm_down, comm_up=0,
                 cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
@@ -185,6 +205,78 @@ class ClassificationStrategy(TaskStrategy):
         loss, metric_value, extra_metric = evaluate_model(global_model, x_test, y_test, task_type="classification")
         mscore = metric_score_value("classification", metric_value)
         return loss, metric_value, mscore, extra_metric
+
+
+class HFInferenceClassificationStrategy(TaskStrategy):
+    def task_type(self) -> str:
+        return "classification"
+
+    def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down):
+        # x is list[str], y is np.ndarray[int]
+        samples_count = len(y)
+
+        start = time.time()
+        tracker = ResourceTracker()
+        tracker.start()
+
+        try:
+            # For HF inference-only we treat "global_model" as the service itself (adapter instance)
+            adapter = global_model
+            if adapter is None:
+                adapter = self.build_model()
+
+            loss, acc, f1, qos = adapter.evaluate(x, y)
+
+            duration = time.time() - start
+            usage = tracker.stop(duration)
+
+            mscore = metric_score_value("classification", acc)
+
+            return ClientOutcome(
+                participated=True, fail_reason="", samples_count=samples_count, duration=duration,
+                loss=loss, metric_value=acc, metric_score=mscore, extra_metric=f1,
+                rounds_so_far=rounds_so_far, comm_down=0, comm_up=0,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
+                payload=None,
+                extras=qos,
+            )
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[ERROR] {client_id} failed in round {round_idx}: {repr(e)}")
+            print(tb)
+
+            duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
+            duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
+            duration = time.time() - start
+            usage = tracker.stop(duration or 1e-9)
+            return ClientOutcome(
+                participated=False, fail_reason=repr(e), samples_count=samples_count, duration=duration,
+                loss=np.nan, metric_value=np.nan, metric_score=np.nan, extra_metric=np.nan,
+                rounds_so_far=rounds_so_far - 1, comm_down=0, comm_up=0,
+                cpu_time_s=usage.cpu_time_s, cpu_utilization=usage.cpu_utilization,
+                memory_used_mb=usage.memory_used_mb, memory_utilization=usage.memory_utilization,
+                gpu_utilization=usage.gpu_utilization, gpu_memory_utilization=usage.gpu_memory_utilization,
+                gpu_memory_used_mb=usage.gpu_memory_used_mb,
+                payload=None, extras={},
+            )
+
+    def aggregate_and_eval(self, global_model, client_payloads, client_outcomes, round_idx, x_train, x_test, y_test):
+        # No weights, so aggregate metrics from participating clients
+        participated = [o for o in (client_outcomes or []) if getattr(o, "participated", False)]
+        if not participated:
+            return np.nan, np.nan, np.nan, np.nan
+
+        loss = _nanmean([o.loss for o in participated])
+        acc = _nanmean([o.metric_value for o in participated])
+        f1 = _nanmean([o.extra_metric for o in participated])
+        mscore = metric_score_value("classification", acc)
+        return loss, acc, mscore, f1
 
 # -------------------- Regression --------------------
 
@@ -364,6 +456,9 @@ class ClusteringStrategy(TaskStrategy):
 
 def make_task_strategy(task_type: str, meta: dict, knobs: dict, config: dict, x_test, y_test, metric_key: str, save_weights: bool) -> TaskStrategy:
     if task_type == "classification":
+        mt = (config.get("model_type") or "").lower()
+        if mt in ("hf", "hf_text", "transformers"):
+            return HFInferenceClassificationStrategy(meta, knobs, config, x_test, y_test, metric_key, save_weights)
         return ClassificationStrategy(meta, knobs, config, x_test, y_test, metric_key, save_weights)
     if task_type == "regression":
         return RegressionStrategy(meta, knobs, config, x_test, y_test, metric_key, save_weights)

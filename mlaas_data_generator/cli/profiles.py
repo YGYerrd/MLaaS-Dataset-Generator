@@ -8,7 +8,8 @@ DATASET_CHOICES = [
     "iris",
     "wine",
     "california_housing",
-    "diabetes",             
+    "diabetes",
+    "hf",          
 ]
 
 def infer_dataset_profile(dataset: str) -> dict:

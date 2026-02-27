@@ -109,6 +109,9 @@ CREATE TABLE IF NOT EXISTS client_rounds (
 
   comm_bytes_up                INTEGER,
   comm_bytes_down              INTEGER,
+  inference_latency_ms_mean    REAL,
+  inference_latency_ms_p95     REAL,
+  throughput_eps               REAL,
 
   -- QoS / metrics (task-dependent; nullable)
   loss                         REAL,

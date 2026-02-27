@@ -2,33 +2,73 @@ import numpy as np
 
 def get_data_distribution(
     y,
-    num_classes: int | None,
-    bins: int | None = None,
-    value_range: tuple[float, float] | None = None,
+    num_classes=None,
+    bins=None,
+    value_range=None,
+    label_pad_value=-100,
 ):
-    """Return the target distribution for a client dataset.
-
-    For classification tasks ``num_classes`` should be provided and the return
-    value is a mapping of class index to count. For regression tasks
-    ``num_classes`` can be ``None`` and a histogram with ``bins`` buckets will
-    be produced over ``value_range``.
-    """
-
+    # -------------------------
+    # Regression path
+    # -------------------------
     if num_classes is None:
+        if y is None:
+            if bins is None:
+                bins = 10
+            return {f"bin_{i}": 0 for i in range(int(bins))}
+
         if bins is None:
             bins = 10
-        if value_range is not None:
-            hist, _ = np.histogram(y, bins=bins, range=value_range)
-        else:
-            hist, _ = np.histogram(y, bins=bins)
-        return {
-            f"bin_{i}": int(hist[i])
-            for i in range(len(hist))
-        }
 
+        y_arr = np.asarray(y, dtype="float32").reshape(-1)
+        if value_range is not None:
+            hist, _ = np.histogram(y_arr, bins=int(bins), range=value_range)
+        else:
+            hist, _ = np.histogram(y_arr, bins=int(bins))
+
+        return {f"bin_{i}": int(hist[i]) for i in range(len(hist))}
+
+    # -------------------------
+    # Classification path
+    # -------------------------
+    num_classes = int(num_classes)
     distribution = {i: 0 for i in range(num_classes)}
-    for label in y:
-        distribution[int(label)] += 1
+
+    if y is None:
+        return distribution
+
+    try:
+        y_arr = np.asarray(y)
+    except Exception:
+        return distribution
+
+    y_flat = y_arr.reshape(-1)
+
+    try:
+        y_flat = y_flat.astype("int64", copy=False)
+    except Exception:
+        cleaned = []
+        for t in y_flat:
+            if t is None:
+                continue
+            try:
+                cleaned.append(int(t))
+            except Exception:
+                continue
+        if not cleaned:
+            return distribution
+        y_flat = np.asarray(cleaned, dtype="int64")
+
+    if label_pad_value is not None:
+        y_flat = y_flat[y_flat != int(label_pad_value)]
+    y_flat = y_flat[y_flat >= 0]
+
+    if y_flat.size == 0:
+        return distribution
+    counts = np.bincount(y_flat, minlength=num_classes)
+
+    for i in range(num_classes):
+        distribution[i] = int(counts[i])
+
     return distribution
 
 

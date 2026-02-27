@@ -63,7 +63,7 @@ def register_generate(subparsers):
     p.add_argument("--rounds", type=int, default=None, help="Number of global rounds")
     p.add_argument("--clients", type=int, default=CONFIG["num_clients"], help="Number of clients")
     p.add_argument("--client-dropout-rate", type=float, default=None, help="Per-round dropout prob [0–1]")
-    p.add_argument("--model-type", type=str, default=None, choices=["CNN","MLP","LogReg","ResNet","Custom"], help="Model family")
+    p.add_argument("--model-type", type=str, default=None, choices=["CNN","MLP","LogReg","ResNet","Custom", "hf", "hf_finetune"], help="Model family")
     p.add_argument("--task-type", type=str, default=None, choices=["classification","regression","clustering"], help="Task type")
     p.add_argument("--output", type=str, default="clients.csv", help="Output CSV")
     p.add_argument("--dataset", type=str, default="mnist", choices=DATASET_CHOICES, help="Dataset")

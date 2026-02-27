@@ -1,10 +1,23 @@
 import numpy as np
 from numpy.random import default_rng, Generator
 
+
+def _take(x, idx):
+    if isinstance(x, dict):
+        return {k: _take(v, idx) for k, v in x.items()}
+    if isinstance(x, np.ndarray):
+        return x[idx]
+    if isinstance(x, (list, tuple)):
+        idx_list = idx.tolist() if isinstance(idx, np.ndarray) else list(idx)
+        return [x[i] for i in idx_list]
+    x_arr = np.asarray(x, dtype=object)
+    return x_arr[idx]
+
+
 def _build_clients_from_indices(x, y, indices_by_client: dict):
     clients = {}
     for cid, idx in indices_by_client.items():
-        clients[cid] = {"x": x[idx], "y": y[idx]}
+        clients[cid] = {"x": _take(x, idx), "y": _take(y, idx)}
     return clients
 
 
@@ -153,7 +166,13 @@ def _shrink_dataset(x, y, sample_size=None, sample_frac=None, rng=None):
         sample_size = int(round(n * float(sample_frac)))
     sample_size = max(0, min(n, int(sample_size)))
     idx = seed.choice(n, size=sample_size, replace=False)
-    return x[idx], y[idx]
+
+    if isinstance(y, np.ndarray):
+        y_subset = y[idx]
+    else:
+        y_subset = [y[i] for i in idx]
+
+    return _take(x, idx), y_subset
 
 
 def split_data(x, y, num_clients, strategy = "iid", distribution_param = None, custom_distributions=None, sample_size=None, sample_frac=None, rng=None):

@@ -4,16 +4,22 @@ from keras import layers, models, optimizers, regularizers
 from keras.applications import MobileNetV2
 from keras.applications.mobilenet_v2 import preprocess_input
 import tensorflow as tf
-from .adapters import KMeansAdapter, make_random_forest
+
+from .adapters.generic_adapters import KMeansAdapter, make_random_forest
+
 
 def _make_optimizer(name: str, lr: float):
     if name is None or name.lower() == "none" or lr is None:
         return None
     name = name.lower()
-    if name == "sgd":     return optimizers.SGD(learning_rate=lr, momentum=0.0)
-    if name == "rmsprop": return optimizers.RMSprop(learning_rate=lr)
-    if name == "adagrad": return optimizers.Adagrad(learning_rate=lr)
-    if name == "adamw":   return optimizers.AdamW(learning_rate=lr)
+    if name == "sgd":
+        return optimizers.SGD(learning_rate=lr, momentum=0.0)
+    if name == "rmsprop":
+        return optimizers.RMSprop(learning_rate=lr)
+    if name == "adagrad":
+        return optimizers.Adagrad(learning_rate=lr)
+    if name == "adamw":
+        return optimizers.AdamW(learning_rate=lr)
     return optimizers.Adam(learning_rate=lr)
 
 
@@ -28,23 +34,126 @@ def create_model(
     optimizer: str = "adam",
     task_type: str = "classification",
     model_type: str | None = None,
+    meta=None,
     **kwargs
-): 
+):
+    # Allow meta to be passed via kwargs as well
+    if meta is None:
+        meta = kwargs.get("meta")
 
-    l2 = regularizers.l2(weight_decay) if weight_decay > 0 else None
+    l2 = regularizers.l2(weight_decay) if weight_decay and weight_decay > 0 else None
+
+    model_choice = (model_type or "").lower()
+
+    # ----------------------------
+    # HF adapters (prefer loader meta)
+    # ----------------------------
+    if model_choice in ("hf_finetune", "hf_train", "transformers_finetune"):
+        from .adapters.hf_adapter import TransformersTextFineTuneAdapter
+
+        model_id = None
+        if isinstance(meta, dict):
+            model_id = meta.get("hf_model_id")
+        model_id = model_id or kwargs.get("hf_model_id") or kwargs.get("model_id") or kwargs.get("model_name")
+        if not model_id:
+            raise ValueError("HF fine-tune model_type requires hf_model_id=<huggingface_model_repo_id>")
+
+        hf_task = None
+        if isinstance(meta, dict):
+            hf_task = meta.get("hf_task")
+        hf_task = hf_task or kwargs.get("hf_task", "sequence_classification")
+
+        label_pad_value = -100
+        if isinstance(meta, dict):
+            label_pad_value = int(meta.get("label_pad_value", -100))
+        else:
+            label_pad_value = int(kwargs.get("label_pad_value", -100))
+
+        # max_length: prefer explicit, else meta input_shape, else fallback
+        max_length = kwargs.get("max_length", None)
+        if max_length is None and isinstance(meta, dict):
+            ish = meta.get("input_shape")
+            if ish and len(ish) >= 1:
+                max_length = ish[0]
+        if max_length is None:
+            # fall back to input_shape only if provided
+            if input_shape is not None and len(input_shape) >= 1:
+                max_length = input_shape[0]
+            else:
+                max_length = 128
+        max_length = int(max_length)
+
+        batch_size = int(kwargs.get("batch_size", 16))
+        device = kwargs.get("device", None)
+
+        return TransformersTextFineTuneAdapter(
+            model_id=model_id,
+            num_labels=int(num_classes),
+            max_length=max_length,
+            batch_size=batch_size,
+            device=device,
+            hf_task=hf_task,
+            label_pad_value=label_pad_value,
+        )
+
+    if model_choice in ("hf", "hf_text", "transformers"):
+        from .adapters.hf_adapter import TransformersTextClassifierAdapter
+
+        model_id = None
+        if isinstance(meta, dict):
+            model_id = meta.get("hf_model_id")
+        model_id = model_id or kwargs.get("hf_model_id") or kwargs.get("model_id") or kwargs.get("model_name")
+        if not model_id:
+            raise ValueError("HF model_type requires hf_model_id=<huggingface_model_repo_id>")
+
+        max_length = kwargs.get("max_length", None)
+        if max_length is None and isinstance(meta, dict):
+            ish = meta.get("input_shape")
+            if ish and len(ish) >= 1:
+                max_length = ish[0]
+        if max_length is None:
+            if input_shape is not None and len(input_shape) >= 1:
+                max_length = input_shape[0]
+            else:
+                max_length = 128
+        max_length = int(max_length)
+
+        batch_size = int(kwargs.get("batch_size", 16))
+        device = kwargs.get("device", None)
+
+        # If you only support sequence-classification inference, you can omit hf_task here.
+        return TransformersTextClassifierAdapter(
+            model_id=model_id,
+            max_length=max_length,
+            batch_size=batch_size,
+            device=device,
+        )
+
+    # ----------------------------
+    # Non-HF models (need rank)
+    # ----------------------------
+    if input_shape is None:
+        raise ValueError("input_shape is required for non-HF models")
+
     rank = len(input_shape)
-    model_choice = (model_type or ("cnn" if rank == 3 else "mlp")).lower()
+    if not model_choice:
+        model_choice = ("cnn" if rank == 3 else "mlp")
 
     if task_type == "clustering":
-        k        = kwargs.get("k", kwargs.get("clustering_k", 3))
-        init     = kwargs.get("clustering_init", "k-means++")
-        n_init   = int(kwargs.get("clustering_n_init", 10))
+        k = kwargs.get("k", kwargs.get("clustering_k", 3))
+        init = kwargs.get("clustering_init", "k-means++")
+        n_init = int(kwargs.get("clustering_n_init", 10))
         max_iter = int(kwargs.get("clustering_max_iter", 300))
-        tol      = float(kwargs.get("clustering_tol", 1e-4))
-        seed     = kwargs.get("random_state", kwargs.get("seed", None))
+        tol = float(kwargs.get("clustering_tol", 1e-4))
+        seed = kwargs.get("random_state", kwargs.get("seed", None))
         return KMeansAdapter(
-            input_shape=input_shape, k=k, init=init, n_init=n_init,
-            max_iter=max_iter, tol=tol, random_state=seed
+            input_shape=input_shape,
+            k=k,
+            init=init,
+            n_init=n_init,
+            max_iter=max_iter,
+            tol=tol,
+            random_state=seed,
         )
 
     is_regression = (task_type == "regression")

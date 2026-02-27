@@ -1,23 +1,15 @@
 # orchestrator.py
 from __future__ import annotations
-import os, uuid
+import os, uuid, json
 import numpy as np
 
 from ..config import CONFIG
-from ..data.loaders import load_dataset
+from ..data.master_loader import load_dataset
 from ..data.splitters import split_data
 from ..data.distributions import get_data_distribution
 from ..storage.writer import make_writer
-from .task import make_task_strategy
+from .strategies.factory import make_task_strategy
 from .system_metrics import capture_hardware_snapshot, summarize_round_usage
-
-from .records import (
-    build_run_meta,
-    build_run_record,
-    build_client_record,
-    build_skip_record,
-    build_round_record
-)
 
 class FederatedDataGenerator:
     """Generate MLaaS client records using a simple federated-learning loop."""
@@ -29,7 +21,6 @@ class FederatedDataGenerator:
         model_type: str | None = None,
         dataset_args: dict | None = None,
     ):
-        # --- config & identity
         self.config = CONFIG.copy()
         if config:
             self.config.update(config)
@@ -39,7 +30,7 @@ class FederatedDataGenerator:
         self.config["dataset"] = self.dataset
         self.config["model_type"] = self.model_type
 
-        # --- dataset args
+        # dataset args
         self.dataset_args = {}
         config_dataset_args = self.config.get("dataset_args") or {}
         if isinstance(config_dataset_args, dict):
@@ -49,20 +40,21 @@ class FederatedDataGenerator:
         if self.dataset_args:
             self.config["dataset_args"] = dict(self.dataset_args)
 
-        # --- load data
+        # load data
         train, test, meta = load_dataset(self.dataset, **self.dataset_args)
         (self.x_train, self.y_train), (self.x_test, self.y_test) = train, test
         self.meta = meta
         self.input_shape = tuple(meta["input_shape"])
         self.num_classes = meta.get("num_classes")
 
-        # --- task & metric labels
+        # task type resolution
         requested_task = task_type or self.config.get("task_type")
         meta_task = meta.get("task_type", "classification")
         self.task_type = requested_task or meta_task
         if requested_task != meta_task:
             print(f"Warning: overriding dataset task type '{meta_task}' with requested '{self.task_type}'.")
 
+        # metric keys
         if self.task_type == "clustering":
             self.metric_key = "silhouette"
             self.metric_label = "Silhouette"
@@ -83,14 +75,15 @@ class FederatedDataGenerator:
                 y_min = float(np.min(self.y_train))
                 y_max = float(np.max(self.y_train))
                 if y_min == y_max:
-                    y_min -= 0.5; y_max += 0.5
+                    y_min -= 0.5
+                    y_max += 0.5
                 self.distribution_range = (y_min, y_max)
             else:
                 self.distribution_range = (0.0, 1.0)
         else:
             self.distribution_range = None
 
-        # --- knobs
+        # knobs
         hidden_layers = self.config.get("hidden_layers", [self.config.get("reduced_neurons", 64)])
         if hidden_layers is None:
             hidden_layers = [self.config.get("reduced_neurons", 64)]
@@ -113,12 +106,12 @@ class FederatedDataGenerator:
             "sample_size": self.config.get("sample_size", None),
             "sample_frac": self.config.get("sample_frac", None),
             "distribution_bins": self.distribution_bins,
-            "early_stopping_patience": self.config.get("early_stopping_patience")
+            "early_stopping_patience": self.config.get("early_stopping_patience"),
         }
 
         self.rng = np.random.default_rng(self.config.get("seed", 42))
 
-        # Strategy encapsulates build/train/eval details for this task (thin wrapper around your current logic)
+        # strategy encapsulates build/train/eval details
         self.strategy = make_task_strategy(
             task_type=self.task_type,
             meta=self.meta,
@@ -130,137 +123,264 @@ class FederatedDataGenerator:
             save_weights=self.save_weights,
         )
 
-        # --- Disable multi-round training for non-federated models
-        if self.task_type == "clustering" or self.model_type.lower() == "randomforest":
+        # Disable multi-round training for non-federated models
+        if self.task_type == "clustering" or (self.model_type or "").lower() == "randomforest":
             print(f"Non-federated model detected ({self.model_type}); forcing single-round training.")
             self.knobs["num_rounds"] = 1
+    
+    def _early_stopping_patience(self):
+        patience_cfg = self.config.get("early_stopping_patience")
+        if patience_cfg in (None, "", False):
+            return None
+        try:
+            p = int(patience_cfg)
+        except (TypeError, ValueError):
+            return None
+        if p <= 0:
+            return None
+        return p
 
     def run(self):
         os.makedirs("weights", exist_ok=True)
-        patience_cfg = self.config.get("early_stopping_patience")
-        if patience_cfg in (None, "", False):
-            early_stopping_patience = None
-        else:
-            try:
-                early_stopping_patience = int(patience_cfg)
-            except (TypeError, ValueError):
-                early_stopping_patience = None
-            else:
-                if early_stopping_patience <= 0:
-                    early_stopping_patience = None
+
+        early_stopping_patience = self._early_stopping_patience()
+
         if self.task_type == "regression" and self.knobs["distribution_type"] in {"dirichlet", "shard", "label_per_client"}:
             print("Warning: label-based partitioning not supported for regression; using 'iid'.")
             self.knobs["distribution_type"] = "iid"
 
         clients, split_info = split_data(
-            self.x_train, self.y_train, self.knobs["num_clients"],
+            self.x_train,
+            self.y_train,
+            self.knobs["num_clients"],
             strategy=self.knobs["distribution_type"],
             distribution_param=self.knobs["distribution_param"],
             custom_distributions=self.knobs["custom_distributions"],
             sample_size=self.knobs["sample_size"],
             sample_frac=self.knobs["sample_frac"],
-            rng=self.rng
+            rng=self.rng,
         )
-        print("\n========== RUN CONFIGURATION SUMMARY ==========")
-        for key, val in sorted(self.config.items()):
-            print(f"{key:25}: {val}")
+
+        print("\n========== RUN SUMMARY ==========")
+
+        # Universal info (runner-ish)
+        base = [
+            ("dataset", self.dataset),
+            ("task_type", self.task_type),
+            ("model_type", self.model_type),
+            ("num_clients", self.knobs["num_clients"]),
+            ("num_rounds", self.knobs["num_rounds"]),
+            ("client_dropout_rate", self.config.get("client_dropout_rate", 0.0)),
+            ("seed", self.config.get("seed", 42)),
+            ("save_weights", self.save_weights),
+            ("input_shape", self.input_shape),
+            ("num_classes", self.num_classes),
+        ]
+
+        # Splitter info (always relevant)
+        splitter = [
+            ("split.strategy", self.knobs.get("distribution_type")),
+            ("split.param", self.knobs.get("distribution_param")),
+            ("split.sample_size", self.knobs.get("sample_size")),
+            ("split.sample_frac", self.knobs.get("sample_frac")),
+            ("split.distribution_bins", self.knobs.get("distribution_bins")),
+        ]
+
+        def _print_kv(items, width=26):
+            for k, v in items:
+                if v is None:
+                    continue
+                print(f"{k:>{width}} : {v}")
+
+        _print_kv(base)
         print("------------------------------------------------")
-        print("Derived knobs:")
-        for key, val in sorted(self.knobs.items()):
-            print(f"{key:25}: {val}")
-        print("------------------------------------------------")
-        print(f"Dataset:         {self.dataset}")
-        print(f"Model Type:      {self.model_type}")
-        print(f"Task Type:       {self.task_type}")
-        print(f"Input Shape:     {self.input_shape}")
-        print(f"Num Classes:     {self.num_classes}")
-        print(f"Save Weights:    {self.save_weights}")
-        print(f"Distribution Bins: {self.distribution_bins}")
+        _print_kv(splitter)
+
+        # Strategy-specific (adapter/dataset/etc) — the important part
+        lines = self.strategy.summary_lines()
+        if lines:
+            print("------------------------------------------------")
+            for k, v in lines:
+                if k.startswith("[") and v == "":
+                    print(k)
+                    continue
+                if v is None:
+                    continue
+                print(f"{k:>26} : {v}")
+
         print("================================================\n")
+
         print("Client data distributions before training:")
+        client_distributions = {}
         for client_id, data in clients.items():
-            print(f"{client_id}: {get_data_distribution(data['y'], self.num_classes, bins=self.knobs.get('distribution_bins'), value_range=self.distribution_range)}")
+            dist = get_data_distribution(
+                data["y"],
+                self.num_classes,
+                bins=self.knobs.get("distribution_bins"),
+                value_range=self.distribution_range,
+            )
+            client_distributions[client_id] = dist
+            print(f"{client_id}: {dist}")
 
         # build global model via strategy
         global_model = self.strategy.build_model()
 
         hardware_snapshot = capture_hardware_snapshot()
 
-        run_meta = build_run_meta(
-            run_id=str(uuid.uuid4()),
-            dataset=self.dataset,
-            task_type=self.task_type,
-            model_type=self.model_type,
-            split_meta=split_info,
-            knobs=self.knobs,
-            params_count=int(global_model.count_params()),
-            metric_name=self.metric_key,
-            hardware_snapshot=hardware_snapshot
-        )
+        try:
+            params_count = int(global_model.count_params())
+        except Exception:
+            try:
+                params_count = int(sum(p.numel() for p in global_model.model.parameters()))
+            except Exception:
+                params_count = 0
 
-        db_path = self.config.get("db_path", "federated.db")
+        run_id = str(uuid.uuid4())
+
+        db_path = self.config.get("db_path", "federated2.db")
         writer = make_writer("sqlite", db_path=db_path)
         writer.start()
         try:
-            writer.write_run(build_run_record(run_meta, self.knobs, self.config))
+            # Seed metric dictionary (recommended)
+            if hasattr(writer, "seed_metrics"):
+                writer.seed_metrics()
+
+            # --- runs dimension
+            writer.write_run(
+                {
+                    "run_id": run_id,
+                    "dataset": self.dataset,
+                    "task_type": self.task_type,
+                    "model_type": self.model_type,
+                    "num_clients": self.knobs["num_clients"],
+                    "num_rounds": self.knobs["num_rounds"],
+                }
+            )
+
+            # --- run_params (normalised config)
+            # scope suggestions: runner/dataset/adapter/aggregator/splitter
+            if hasattr(writer, "write_run_param"):
+                # runner level
+                writer.write_run_param(run_id, "runner", "seed", self.config.get("seed", 42))
+                writer.write_run_param(run_id, "runner", "client_dropout_rate", self.config.get("client_dropout_rate", 0.0))
+                writer.write_run_param(run_id, "runner", "save_weights", self.save_weights)
+
+                # splitter / distribution
+                writer.write_run_param(run_id, "splitter", "distribution_type", self.knobs.get("distribution_type"))
+                writer.write_run_param(run_id, "splitter", "distribution_param", self.knobs.get("distribution_param"))
+                writer.write_run_param(run_id, "splitter", "distribution_bins", self.knobs.get("distribution_bins"))
+                writer.write_run_param(run_id, "splitter", "sample_size", self.knobs.get("sample_size"))
+                writer.write_run_param(run_id, "splitter", "sample_frac", self.knobs.get("sample_frac"))
+
+                params_by_scope = self.strategy.loggable_run_params()
+                for scope, kv in (params_by_scope or {}).items():
+                    for k, v in (kv or {}).items():
+                        writer.write_run_param(run_id, scope, k, v)
+
+                # dataset args (store as JSON)
+                writer.write_run_param(run_id, "dataset", "dataset_args", self.dataset_args)
+
+                # hardware snapshot / params count (optional)
+                writer.write_run_param(run_id, "runner", "params_count", params_count)
+                writer.write_run_param(run_id, "runner", "hardware_snapshot", hardware_snapshot)
+
+            # --- clients dimension
+            for client_id, data in clients.items():
+                writer.write_client(
+                    {
+                        "run_id": run_id,
+                        "client_id": client_id,
+                        "data_distribution_json": json.dumps(client_distributions.get(client_id, {})),
+                        "samples_count": int(len(data["y"])),
+                    }
+                )
 
             participated_counts = {cid: 0 for cid in clients.keys()}
 
             for round_num in range(self.knobs["num_rounds"]):
                 round_idx = round_num + 1
                 print(f"--- Round {round_idx} ---")
+
                 client_payloads = []
                 client_outcomes = []
                 round_metrics = []
                 skipped_clients = 0
 
-                # bytes to broadcast down: size of global weights (strategy computes)
                 down_bytes = self.strategy.comm_down_bytes(global_model)
 
-                for client_id, data in clients.items():
+                # Round dimension row
+                writer.write_round(
+                    {
+                        "run_id": run_id,
+                        "round": round_idx,
+                        "scheduled_clients": len(clients),
+                        "attempted_clients": None,
+                        "participating_clients": None,
+                        "dropped_clients": None,
+                    }
+                )
 
-                    distribution = get_data_distribution(
-                        data["y"], self.num_classes, bins=self.knobs.get("distribution_bins"), value_range=self.distribution_range
-                    )
-                    n_samples = len(data["y"])
+                for client_id, data in clients.items():
+                    dist = client_distributions.get(client_id)
+                    n_samples = int(len(data["y"]))
 
                     # dropout
                     if self.rng.random() < self.config.get("client_dropout_rate", 0.0):
-                        row = build_skip_record(
-                            run_meta, round_idx, client_id, distribution, n_samples,
-                            rounds_so_far=participated_counts[client_id],
-                            comm_down=down_bytes
-                        )
-                        writer.write_client_round(row)
-                        print(f"{client_id} dropped out ")
                         skipped_clients += 1
+                        # record dropout as measurements
+                        writer.write_measurements(
+                            run_id=run_id,
+                            round=round_idx,
+                            client_id=client_id,
+                            values={
+                                "participated_flag": False,
+                                "fail_reason": "client_dropout",
+                                "samples_count": n_samples,
+                                "comm_bytes_down": int(down_bytes),
+                                "comm_bytes_up": 0,
+                                "compute_time_s": 0.0,
+                            },
+                        )
+                        print(f"{client_id} dropped out")
                         continue
 
-                    # train client via strategy
                     next_rounds_so_far = participated_counts[client_id] + 1
-
                     print(f"{client_id} training...")
-                    
+
                     outcome = self.strategy.train_client(
                         client_id=client_id,
-                        x=data["x"], y=data["y"],
+                        x=data["x"],
+                        y=data["y"],
                         global_model=global_model,
                         round_idx=round_idx,
                         rounds_so_far=next_rounds_so_far,
                         comm_down=down_bytes,
                     )
-                    # record
-                    row = build_client_record(
-                        run_meta=run_meta,
-                        round_idx=round_idx,
-                        client_id=client_id,
-                        distribution=distribution,
-                        metric_key=self.metric_key,
-                        outcome=outcome,
-                        task_type=self.task_type,
-                    )
-                    writer.write_client_round(row)
+
                     client_outcomes.append(outcome)
+
+                    # write client-round measurements
+                    writer.write_measurements(
+                        run_id=run_id,
+                        round=round_idx,
+                        client_id=client_id,
+                        values={
+                            "participated_flag": bool(outcome.participated),
+                            "fail_reason": outcome.fail_reason if not outcome.participated else None,
+                            "samples_count": int(outcome.samples_count),
+                            "compute_time_s": float(outcome.duration),
+                            "comm_bytes_down": int(outcome.comm_down),
+                            "comm_bytes_up": int(outcome.comm_up),
+                            "loss": float(outcome.loss) if outcome.loss == outcome.loss else None,
+                            self.metric_key: float(outcome.metric_value) if outcome.metric_value == outcome.metric_value else None,
+                            "metric_score": float(outcome.metric_score) if outcome.metric_score == outcome.metric_score else None,
+                            "extra_metric": float(outcome.extra_metric) if outcome.extra_metric == outcome.extra_metric else None,
+                            "cpu_time_s": float(outcome.cpu_time_s) if outcome.cpu_time_s is not None else None,
+                            "memory_used_mb": float(outcome.memory_used_mb) if outcome.memory_used_mb is not None else None,
+                            "gpu_memory_used_mb": float(outcome.gpu_memory_used_mb) if outcome.gpu_memory_used_mb is not None else None,
+                        },
+                    )
+
                     round_metrics.append(
                         {
                             "participated": bool(outcome.participated),
@@ -274,7 +394,7 @@ class FederatedDataGenerator:
                             "cpu_time_s": outcome.cpu_time_s,
                         }
                     )
-                    
+
                     if outcome.participated:
                         participated_counts[client_id] = next_rounds_so_far
 
@@ -298,16 +418,30 @@ class FederatedDataGenerator:
                     skipped_clients=skipped_clients,
                 )
 
+                # update round dimension with aggregates
                 writer.write_round(
-                    build_round_record(
-                        run_meta,
-                        round_idx=round_idx,
-                        loss=loss,
-                        global_metric=global_metric,
-                        global_score=global_score,
-                        global_extra=global_extra,
-                        resource_summary=round_usage_summary
-                    )
+                    {
+                        "run_id": run_id,
+                        "round": round_idx,
+                        "scheduled_clients": len(clients),
+                        "attempted_clients": int(len(clients) - skipped_clients),
+                        "participating_clients": int(sum(1 for o in client_outcomes if getattr(o, "participated", False))),
+                        "dropped_clients": int(skipped_clients),
+                    }
+                )
+
+                # write round-level measurements (client_id NULL)
+                writer.write_measurements(
+                    run_id=run_id,
+                    round=round_idx,
+                    client_id=None,
+                    values={
+                        "global_loss": loss,
+                        f"global_{self.metric_key}": global_metric,
+                        "global_metric_score": global_score,
+                        "global_aux_metric": global_extra,
+                        "round_resource_summary": round_usage_summary,
+                    },
                 )
 
                 if self.task_type == "regression" and self.target_scaler and self.target_scaler.get("type") == "standard":
@@ -321,12 +455,13 @@ class FederatedDataGenerator:
                     print(f"Global metric score: {global_score}")
                 if global_extra is not None:
                     print(f"Global auxiliary metric: {global_extra}")
+
         finally:
             writer.finish()
 
         print("Federated Learning Process Complete!\n")
         return {
-            "run_id": run_meta["run_id"],
+            "run_id": run_id,
             "db_path": db_path,
             "rounds": self.knobs["num_rounds"],
             "clients": self.knobs["num_clients"],

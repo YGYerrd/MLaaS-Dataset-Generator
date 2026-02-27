@@ -13,6 +13,14 @@ def _take(x, idx):
     x_arr = np.asarray(x, dtype=object)
     return x_arr[idx]
 
+def _num_samples(x):
+    """Return the number of examples in ``x`` across supported container shapes."""
+    if isinstance(x, dict):
+        if not x:
+            return 0
+        first = next(iter(x.values()))
+        return int(len(first))
+    return int(len(x))
 
 def _build_clients_from_indices(x, y, indices_by_client: dict):
     clients = {}
@@ -26,7 +34,7 @@ def _seed(rng):
 
 
 def _split_iid(x, y, num_clients, rng=None):
-    n = len(x)
+    n = _num_samples(x)
     seed = _seed(rng)
 
     idx = seed.permutation(n)
@@ -42,7 +50,7 @@ def _split_quantity_skew(x, y, num_clients, alpha, rng=None):
     `alpha` controls the difference in client sizes.
     Larger `alpha` results in more balanced client sizes.
     """
-    n = len(x)
+    n = _num_samples(x)
     seed = _seed(rng)
 
     proportions = seed.dirichlet([alpha] * num_clients)
@@ -159,7 +167,7 @@ def _split_custom_data(x, y, client_distributions: dict, rng=None):
 
 def _shrink_dataset(x, y, sample_size=None, sample_frac=None, rng=None):
     seed = _seed(rng)
-    n = len(x)
+    n = _num_samples(x)
     if sample_size is None and sample_frac is None:
         return x, y
     if sample_frac is not None:

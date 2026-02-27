@@ -158,24 +158,7 @@ class TaskStrategy:
                 out.append((k, kv[k]))
         return out  
     
-    def samples_count_from_xy(x, y):
-        # Prefer X because HF tokenised data is dict-of-arrays
-        if isinstance(x, dict):
-            if "input_ids" in x:
-                return int(np.asarray(x["input_ids"]).shape[0])
-            k0 = next(iter(x.keys()))
-            return int(np.asarray(x[k0]).shape[0])
 
-        if y is not None:
-            try:
-                return int(len(y))
-            except Exception:
-                pass
-
-        try:
-            return int(np.asarray(x).shape[0])
-        except Exception:
-            return 0
     
     def task_type(self) -> str: ...
     def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down) -> ClientOutcome: ...

@@ -6,25 +6,7 @@ from .base import TaskStrategy, ClientOutcome, _nanmean, weights_size, metric_sc
 from ..system_metrics import ResourceTracker
 from ...models.train_eval import aggregate_state_dict
 
-def _num_examples(x, y):
-    if isinstance(x, dict):
-        if "input_ids" in x:
-            return int(np.asarray(x["input_ids"]).shape[0])
-        k0 = next(iter(x.keys()))
-        return int(np.asarray(x[k0]).shape[0])
 
-    if y is not None:
-        try:
-            return int(len(y))
-        except Exception:
-            pass
-
-    # Last resort: numpy shape
-    try:
-        return int(np.asarray(x).shape[0])
-    except Exception:
-        return 0
-    
 class HFStrategy(TaskStrategy):
     """
     Single HF strategy that covers:
@@ -116,7 +98,7 @@ class HFStrategy(TaskStrategy):
             local_adapter = self.build_model()
             self._client_adapters[client_id] = local_adapter
         return local_adapter
-        
+
     # -------------------------
     # Train/eval logic
     # -------------------------
@@ -138,7 +120,7 @@ class HFStrategy(TaskStrategy):
         return loss, primary, secondary, train_qos, eval_qos
 
     def train_client(self, client_id, x, y, global_model, round_idx, rounds_so_far, comm_down):
-        samples_count = _num_examples(x, y)
+        samples_count = len(y)
 
         start = time.time()
         tracker = ResourceTracker()

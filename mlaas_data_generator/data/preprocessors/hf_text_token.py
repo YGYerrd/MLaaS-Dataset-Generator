@@ -27,7 +27,10 @@ def preprocess_hf_text_token(train, test, meta, *, hf_model_id, tokens_column, l
         ) from e
 
     max_length = int(meta.get("max_length", 128))
-    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=False)
 
     def _encode_tokens_and_labels(tokens_list, tags_list):
         # tokens_list: list[list[str]]

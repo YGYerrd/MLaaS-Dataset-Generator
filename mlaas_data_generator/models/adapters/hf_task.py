@@ -44,12 +44,28 @@ class SequenceClassificationSpec(HFTaskSpec):
     name = "sequence_classification"
 
     def build_model(self, transformers, model_id, num_labels):
-        AutoModel = transformers.AutoModelForSequenceClassification
-        return AutoModel.from_pretrained(
-            model_id,
-            num_labels=int(num_labels),
-            ignore_mismatched_sizes=True,
-        )
+        AutoModel = transformers.AutoModelForTokenClassification
+        self.weight_format = None
+        try:
+            model = AutoModel.from_pretrained(
+                model_id,
+                num_labels=int(num_labels),
+                ignore_mismatched_sizes=True,
+                use_safetensors=True,
+            )
+            self.weight_format = "safetensors"
+        except OSError as e:
+            if "safetensors" in str(e).lower():
+                model = AutoModel.from_pretrained(
+                    model_id,
+                    num_labels=int(num_labels),
+                    ignore_mismatched_sizes=True,
+                    use_safetensors=False,
+                )
+                self.weight_format = "pickle"
+            else:
+                raise
+        return model
 
     def encode_batch(self, tokenizer, xb, yb, max_length, torch, device, ignore_index=-100):
         # New loader path: already tokenised dict of arrays
@@ -98,11 +114,27 @@ class TokenClassificationSpec(HFTaskSpec):
 
     def build_model(self, transformers, model_id, num_labels):
         AutoModel = transformers.AutoModelForTokenClassification
-        return AutoModel.from_pretrained(
-            model_id,
-            num_labels=int(num_labels),
-            ignore_mismatched_sizes=True,
-        )
+        self.weight_format = None
+        try:
+            model = AutoModel.from_pretrained(
+                model_id,
+                num_labels=int(num_labels),
+                ignore_mismatched_sizes=True,
+                use_safetensors=True,
+            )
+            self.weight_format = "safetensors"
+        except OSError as e:
+            if "safetensors" in str(e).lower():
+                model = AutoModel.from_pretrained(
+                    model_id,
+                    num_labels=int(num_labels),
+                    ignore_mismatched_sizes=True,
+                    use_safetensors=False,
+                )
+                self.weight_format = "pickle"
+            else:
+                raise
+        return model
 
     def _align_labels(self, enc_word_ids, word_labels, ignore_index=-100):
         aligned = []

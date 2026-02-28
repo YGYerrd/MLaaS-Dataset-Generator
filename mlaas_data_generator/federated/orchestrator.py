@@ -140,6 +140,30 @@ class FederatedDataGenerator:
             return None
         return p
 
+    def _resolve_execution_device(self, model):
+        """Best-effort device string for run summaries (CPU/CUDA/DirectML/etc)."""
+        candidates = [
+            model,
+            getattr(model, "core", None),
+            getattr(model, "model", None),
+        ]
+
+        for obj in candidates:
+            if obj is None:
+                continue
+            device = getattr(obj, "device", None)
+            if device is not None:
+                return str(device)
+
+        torch_model = getattr(model, "model", None)
+        if torch_model is not None:
+            try:
+                return str(next(torch_model.parameters()).device)
+            except Exception:
+                pass
+
+        return "unknown"
+    
     def run(self):
         os.makedirs("weights", exist_ok=True)
 
@@ -160,6 +184,9 @@ class FederatedDataGenerator:
             sample_frac=self.knobs["sample_frac"],
             rng=self.rng,
         )
+        
+        global_model = self.strategy.build_model()
+        execution_device = self._resolve_execution_device(global_model)
 
         print("\n========== RUN SUMMARY ==========")
 
@@ -175,6 +202,7 @@ class FederatedDataGenerator:
             ("save_weights", self.save_weights),
             ("input_shape", self.input_shape),
             ("num_classes", self.num_classes),
+            ("execution_device", execution_device),
         ]
 
         # Splitter info (always relevant)
@@ -223,7 +251,6 @@ class FederatedDataGenerator:
             print(f"{client_id}: {dist}")
 
         # build global model via strategy
-        global_model = self.strategy.build_model()
 
         hardware_snapshot = capture_hardware_snapshot()
 

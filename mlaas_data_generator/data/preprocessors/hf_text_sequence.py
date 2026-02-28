@@ -1,15 +1,47 @@
 import numpy as np
 
-def preprocess_hf_text_sequence(train, test, meta, *, hf_model_id, text_column="text", label_column="label"):
+
+def preprocess_hf_text_sequence(
+    train,
+    test,
+    meta,
+    *,
+    hf_model_id,
+    text_column="text",
+    label_column="label",
+):
     ds_train, _ = train
     ds_test, _ = test
 
     cols = set(ds_train.column_names)
-    if text_column not in cols:
-        raise ValueError(f"Missing text_column '{text_column}' in dataset '{meta.get('hf_id')}'")
+
+    # ----------------------------
+    # Resolve text column(s)
+    # ----------------------------
+    is_pair = False
+    if isinstance(text_column, str):
+        if text_column not in cols:
+            raise ValueError(f"Missing text_column '{text_column}' in dataset '{meta.get('hf_id')}'")
+        text_col_1 = text_column
+        text_col_2 = None
+    elif isinstance(text_column, (list, tuple)) and len(text_column) == 2:
+        is_pair = True
+        text_col_1 = text_column[0]
+        text_col_2 = text_column[1]
+        if text_col_1 not in cols or text_col_2 not in cols:
+            raise ValueError(
+                f"Missing text_column pair {text_column} in dataset '{meta.get('hf_id')}'. "
+                f"Available: {sorted(cols)}"
+            )
+    else:
+        raise ValueError("text_column must be a string or a list/tuple of length 2 for text pairs.")
+
     if label_column not in cols:
         raise ValueError(f"Missing label_column '{label_column}' in dataset '{meta.get('hf_id')}'")
 
+    # ----------------------------
+    # Labels -> int32, mapping
+    # ----------------------------
     try:
         from datasets import ClassLabel
     except Exception:
@@ -40,6 +72,9 @@ def preprocess_hf_text_sequence(train, test, meta, *, hf_model_id, text_column="
         num_classes = int(len(uniq))
         label_mapping = {str(k): int(v) for k, v in uniq.items()}
 
+    # ----------------------------
+    # Tokenise
+    # ----------------------------
     try:
         from transformers import AutoTokenizer
     except Exception as e:
@@ -48,25 +83,51 @@ def preprocess_hf_text_sequence(train, test, meta, *, hf_model_id, text_column="
         ) from e
 
     max_length = int(meta.get("max_length", 128))
-    tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_id, use_fast=False)
 
-    texts_train = list(ds_train[text_column])
-    texts_test = list(ds_test[text_column])
+    if not is_pair:
+        texts_train = list(ds_train[text_col_1])
+        texts_test = list(ds_test[text_col_1])
 
-    enc_train = tokenizer(
-        texts_train,
-        truncation=True,
-        padding="max_length",
-        max_length=max_length,
-        return_tensors="np",
-    )
-    enc_test = tokenizer(
-        texts_test,
-        truncation=True,
-        padding="max_length",
-        max_length=max_length,
-        return_tensors="np",
-    )
+        enc_train = tokenizer(
+            texts_train,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="np",
+        )
+        enc_test = tokenizer(
+            texts_test,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="np",
+        )
+    else:
+        texts1_train = list(ds_train[text_col_1])
+        texts2_train = list(ds_train[text_col_2])
+        texts1_test = list(ds_test[text_col_1])
+        texts2_test = list(ds_test[text_col_2])
+
+        enc_train = tokenizer(
+            texts1_train,
+            texts2_train,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="np",
+        )
+        enc_test = tokenizer(
+            texts1_test,
+            texts2_test,
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="np",
+        )
 
     X_train = {
         "input_ids": enc_train["input_ids"].astype("int32"),
@@ -77,16 +138,23 @@ def preprocess_hf_text_sequence(train, test, meta, *, hf_model_id, text_column="
         "attention_mask": enc_test["attention_mask"].astype("int32"),
     }
 
+    # Some models return token_type_ids for pairs; include if present
+    if "token_type_ids" in enc_train:
+        X_train["token_type_ids"] = enc_train["token_type_ids"].astype("int32")
+        X_test["token_type_ids"] = enc_test["token_type_ids"].astype("int32")
+
+    x_keys = list(X_train.keys())
+
     meta2 = dict(meta)
     meta2.update({
         "input_shape": (max_length,),
         "num_classes": num_classes,
         "label_mapping": label_mapping,
-        "text_column": text_column,
+        "text_column": text_column,       # keep original user-supplied shape (str or [a,b])
         "label_column": label_column,
         "hf_model_id": hf_model_id,
         "x_format": "dict",
-        "x_keys": ["input_ids", "attention_mask"],
+        "x_keys": x_keys,
         "label_granularity": "sequence",
         "hf_task": "sequence_classification",
         "modality": "text",

@@ -9,6 +9,9 @@ import subprocess
 from dataclasses import dataclass
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Tuple
+import re
+import csv
+import io
 
 import psutil
 
@@ -27,7 +30,7 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def query_gpu_snapshot() -> List[Dict[str, Any]]:
+def _query_nvidia_gpu_snapshot():
     """Return per-GPU utilization information if nvidia-smi is available."""
 
     binary = shutil.which("nvidia-smi")
@@ -68,6 +71,96 @@ def query_gpu_snapshot() -> List[Dict[str, Any]]:
         )
     return gpus
 
+def _extract_luid(instance_name: str):
+    match = re.search(r"luid_([^_]+_[^_]+)", instance_name)
+    return match.group(1) if match else None
+
+
+def _query_windows_gpu_snapshot():
+    """Return GPU metrics from Windows perf counters (works for AMD/DirectML too)."""
+
+    if platform.system().lower() != "windows":
+        return []
+
+    typeperf = shutil.which("typeperf")
+    if not typeperf:
+        return []
+
+    counters = [
+        r"\GPU Engine(*)\Utilization Percentage",
+        r"\GPU Adapter Memory(*)\Dedicated Usage",
+        r"\GPU Adapter Memory(*)\Shared Usage",
+    ]
+
+    try:
+        result = subprocess.run(
+            [typeperf, *counters, "-sc", "1"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+
+    rows = list(csv.reader(io.StringIO(result.stdout)))
+    if len(rows) < 3:
+        return []
+
+    headers = rows[0]
+    values = rows[-1]
+    if len(headers) != len(values):
+        return []
+
+    adapters: Dict[str, Dict[str, Any]] = {}
+
+    for header, raw_value in zip(headers[1:], values[1:]):
+        value = _safe_float(raw_value.strip().strip('"'))
+        if value is None:
+            continue
+
+        counter_name = header.strip().strip('"')
+        luid = _extract_luid(counter_name) or "global"
+        item = adapters.setdefault(
+            luid,
+            {
+                "name": f"Windows GPU ({luid})",
+                "memory_total_mb": None,
+                "memory_used_mb": 0.0,
+                "utilization": 0.0,
+                "memory_utilization": None,
+            },
+        )
+
+        lower = counter_name.lower()
+        if "\\gpu engine(" in lower and "utilization percentage" in lower:
+            # Engines are per queue (3D/compute/copy/video). Max is a stable proxy for busy %.
+            item["utilization"] = max(_safe_float(item.get("utilization")) or 0.0, value)
+        elif "\\gpu adapter memory(" in lower and "dedicated usage" in lower:
+            item["memory_used_mb"] = (_safe_float(item.get("memory_used_mb")) or 0.0) + (value / MB)
+        elif "\\gpu adapter memory(" in lower and "shared usage" in lower:
+            item["memory_used_mb"] = (_safe_float(item.get("memory_used_mb")) or 0.0) + (value / MB)
+
+    gpus: List[Dict[str, Any]] = []
+    for gpu in adapters.values():
+        gpu["memory_used_mb"] = _safe_float(gpu.get("memory_used_mb"))
+        gpu["utilization"] = _safe_float(gpu.get("utilization"))
+        gpus.append(gpu)
+
+    return gpus
+
+
+def query_gpu_snapshot() -> List[Dict[str, Any]]:
+    """Return per-GPU utilization information from available providers."""
+
+    nvidia = _query_nvidia_gpu_snapshot()
+    if nvidia:
+        return nvidia
+
+    windows = _query_windows_gpu_snapshot()
+    if windows:
+        return windows
+
+    return []
 
 def capture_hardware_snapshot() -> Dict[str, Any]:
     """Capture a static snapshot of the environment for the run metadata."""

@@ -44,6 +44,302 @@ def run_benchmarks(db_path="outputs/federated_bench.db"):
     # but we can include both to see behaviour differences.
     cases = [
         _case(
+            name="snli_roberta_base_nli",
+            dataset_args={
+                "dataset_name": "snli",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": ["premise", "hypothesis"],
+                "label_column": "label",
+                "max_samples": 1600,
+                "max_length": 128,
+                "hf_model_id": "roberta-base",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+        # Paraphrase (pair classification). QQP is large; keep samples low.
+        _case(
+            name="qqp_minilm_l12_paraphrase",
+            dataset_args={
+                "dataset_name": "glue",
+                "dataset_config": "qqp",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": ["question1", "question2"],
+                "label_column": "label",
+                "max_samples": 2000,
+                "max_length": 128,
+                "hf_model_id": "microsoft/MiniLM-L12-H384-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 3e-5,
+            },
+        ),
+        _case(
+            name="mrpc_bert_base_uncased_paraphrase",
+            dataset_args={
+                "dataset_name": "glue",
+                "dataset_config": "mrpc",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": ["sentence1", "sentence2"],
+                "label_column": "label",
+                "max_samples": 800,
+                "max_length": 128,
+                "hf_model_id": "bert-base-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 3e-5,
+            },
+        ),
+
+        # Toxicity / hate (binary)
+        _case(
+            name="tweet_eval_hate_roberta_base_seqcls",
+            dataset_args={
+                "dataset_name": "tweet_eval",
+                "dataset_config": "hate",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 1500,
+                "max_length": 128,
+                "hf_model_id": "roberta-base",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+        # Domain / Social media sentiment (pre-finetuned service-style model)
+        _case(
+            name="tweet_eval_sentiment_twitter_roberta_prefinetuned",
+            dataset_args={
+                "dataset_name": "tweet_eval",
+                "dataset_config": "sentiment",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 1500,
+                "max_length": 128,
+                "hf_model_id": "cardiffnlp/twitter-roberta-base-sentiment",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+        # =========================================================
+        # MULTI-LABEL CLASSIFICATION (needs loader support)
+        # =========================================================
+        _case(
+            name="go_emotions_roberta_base_multilabel",
+            dataset_args={
+                "dataset_name": "go_emotions",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": "text",
+                # GoEmotions stores labels as a list under "labels"
+                "label_column": "labels",
+                "max_samples": 2000,
+                "max_length": 128,
+                "hf_model_id": "roberta-base",
+                # Still sequence classification, but your adapter must treat labels as multi-hot.
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+        # =========================================================
+        # LONGER CONTEXT / BIGGER MODELS (optional stress tests)
+        # =========================================================
+        _case(
+            name="imdb_longformer_base_4096_seqcls",
+            dataset_args={
+                "dataset_name": "imdb",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 600,
+                "max_length": 512,
+                "hf_model_id": "allenai/longformer-base-4096",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 1e-5,
+            },
+        ),
+
+        # =========================================================
+        # MULTILINGUAL (useful for service-selection diversity)
+        # =========================================================
+        _case(
+            name="xnli_xlm_roberta_base_nli",
+            dataset_args={
+                "dataset_name": "xnli",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": ["premise", "hypothesis"],
+                "label_column": "label",
+                "max_samples": 1200,
+                "max_length": 128,
+                "hf_model_id": "xlm-roberta-base",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+            """
+        # POS tagging via Universal Dependencies (example: English EWT treebank)
+        _case(
+            name="ud_ewt_bert_base_cased_pos",
+            dataset_args={
+                "dataset_name": "universal_dependencies",
+                "dataset_config": "en_ewt",
+                "train_split": "train",
+                "test_split": "validation",
+                "tokens_column": "tokens",
+                # UD typically provides "upos" (universal POS tags) and/or "xpos" (lang-specific).
+                "label_column": "upos",
+                "max_samples": 1200,
+                "max_length": 128,
+                "hf_model_id": "bert-base-cased",
+                "hf_task": "token_classification",
+            },
+            config_overrides={
+                "learning_rate": 5e-5,
+            },
+        ),
+
+        # =========================================================
+        # SEQUENCE CLASSIFICATION (binary / multiclass / NLI / paraphrase)
+        # =========================================================
+
+        # Sentiment (binary)
+        _case(
+            name="imdb_distilbert_base_uncased_seqcls",
+            dataset_args={
+                "dataset_name": "imdb",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 1200,
+                "max_length": 256,
+                "hf_model_id": "distilbert-base-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 3e-5,
+            },
+        ),
+        _case(
+            name="imdb_roberta_base_seqcls",
+            dataset_args={
+                "dataset_name": "imdb",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 1200,
+                "max_length": 256,
+                "hf_model_id": "roberta-base",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+        _case(
+            name="rotten_tomatoes_bert_base_uncased_seqcls",
+            dataset_args={
+                "dataset_name": "rotten_tomatoes",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "text",
+                "label_column": "label",
+                "max_samples": 1200,
+                "max_length": 128,
+                "hf_model_id": "bert-base-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 3e-5,
+            },
+        ),
+
+        # Topic classification (multiclass)
+        _case(
+            name="dbpedia14_distilbert_base_uncased_seqcls",
+            dataset_args={
+                "dataset_name": "dbpedia_14",
+                "train_split": "train",
+                "test_split": "test",
+                "text_column": "content",
+                "label_column": "label",
+                "max_samples": 1500,
+                "max_length": 128,
+                "hf_model_id": "distilbert-base-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 5e-5,
+            },
+        ),
+        _case(
+            name="yahoo_answers_topics_bert_base_uncased_seqcls",
+            dataset_args={
+                "dataset_name": "yahoo_answers_topics",
+                "train_split": "train",
+                "test_split": "test",
+                # Yahoo has "question_title", "question_content", "best_answer".
+                # If your loader supports only a single text column, you can start with "question_content".
+                "text_column": "question_content",
+                "label_column": "topic",
+                "max_samples": 1500,
+                "max_length": 128,
+                "hf_model_id": "bert-base-uncased",
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 3e-5,
+            },
+        ),
+
+        _case(
+            name="wnut17_bert_base_cased_token",
+            dataset_args={
+                "dataset_name": "wnut_17",
+                "train_split": "train",
+                "test_split": "validation",
+                "tokens_column": "tokens",
+                "label_column": "ner_tags",
+                "max_samples": 600,
+                "max_length": 128,
+                "hf_model_id": "bert-base-cased",
+                "hf_task": "token_classification",
+            },
+            config_overrides={
+                "learning_rate": 5e-5,
+            },
+        ),
+        _case(
             name="wnut17_distilbert_token",
             dataset_args={
                 "dataset_name": "wnut_17",
@@ -112,6 +408,77 @@ def run_benchmarks(db_path="outputs/federated_bench.db"):
                 "learning_rate": 5e-5,
             },
         ),
+
+        _case(
+        name="conll2003_bert_base_cased_token",
+        dataset_args={
+            "dataset_name": "conll2003",
+            "train_split": "train",
+            "test_split": "validation",
+            "tokens_column": "tokens",
+            "label_column": "ner_tags",
+            "max_samples": 800,
+            "max_length": 128,
+            "hf_model_id": "bert-base-cased",
+            "hf_task": "token_classification",
+        },
+        config_overrides={
+            "learning_rate": 5e-5,
+        },
+    ),
+    _case(
+        name="conll2003_distilbert_base_cased_token",
+        dataset_args={
+            "dataset_name": "conll2003",
+            "train_split": "train",
+            "test_split": "validation",
+            "tokens_column": "tokens",
+            "label_column": "ner_tags",
+            "max_samples": 800,
+            "max_length": 128,
+            "hf_model_id": "distilbert-base-cased",
+            "hf_task": "token_classification",
+        },
+        config_overrides={
+            "learning_rate": 5e-5,
+        },
+    ),
+    _case(
+        name="conll2003_roberta_base_token",
+        dataset_args={
+            "dataset_name": "conll2003",
+            "train_split": "train",
+            "test_split": "validation",
+            "tokens_column": "tokens",
+            "label_column": "ner_tags",
+            "max_samples": 800,
+            "max_length": 128,
+            "hf_model_id": "roberta-base",
+            "hf_task": "token_classification",
+        },
+        config_overrides={
+            "learning_rate": 3e-5,
+        },
+    ),
+
+    _case(
+        name="wnut17_distilbert_base_uncased_token",
+        dataset_args={
+            "dataset_name": "wnut_17",
+            "train_split": "train",
+            "test_split": "validation",
+            "tokens_column": "tokens",
+            "label_column": "ner_tags",
+            "max_samples": 600,
+            "max_length": 128,
+            "hf_model_id": "distilbert-base-uncased",
+            "hf_task": "token_classification",
+        },
+        config_overrides={
+            "learning_rate": 5e-5,
+        },
+    ),
+    """
         
     ]
 

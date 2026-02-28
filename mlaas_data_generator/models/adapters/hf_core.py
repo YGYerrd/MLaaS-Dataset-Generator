@@ -39,18 +39,38 @@ class HFCore:
         self.batch_size = int(batch_size)
         self.label_pad_value = int(label_pad_value)
 
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = device
+        self.device = self._resolve_device(device)
 
         self.task_spec = task_spec or SequenceClassificationSpec()
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        try:
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, use_fast=True)
+        except Exception:
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, use_fast=False)
 
         self.model = None
+        self.weight_format = None
         if num_labels is not None:
             self.model = self.task_spec.build_model(transformers, model_id, num_labels)
+            self.weight_format = getattr(self.task_spec, "weight_format", None)
             self.model.to(self.device)
 
+
+    def _resolve_device(self, device):
+        torch = self.torch
+
+        if device is not None:
+            return device
+
+        if torch.cuda.is_available():
+            return "cuda"
+
+        try:
+            import torch_directml
+
+            return torch_directml.device()
+        except Exception:
+            return "cpu"
+        
     def _batch_iter(self, xs, ys):
         bs = self.batch_size
 
@@ -162,6 +182,7 @@ class HFCore:
             "max_length": int(self.max_length),
             "hf_task": getattr(self.task_spec, "name", None),
             "label_pad_value": int(self.label_pad_value),
+            "hf_weights_format": self.weight_format,
         }
 
     def eval(self, xs, ys):
@@ -262,6 +283,7 @@ class HFCore:
             "max_length": int(self.max_length),
             "hf_task": getattr(self.task_spec, "name", None),
             "label_pad_value": int(self.label_pad_value),
+            "hf_weights_format": self.weight_format,
         }
 
         return loss_mean, primary, secondary, qos

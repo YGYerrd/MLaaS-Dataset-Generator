@@ -43,6 +43,31 @@ def run_benchmarks(db_path="outputs/federated_bench.db"):
     # Also note: you should use a *base model* for finetuning, not the already-finetuned sst2 head,
     # but we can include both to see behaviour differences.
     cases = [
+        
+        # =========================================================
+        # MULTI-LABEL CLASSIFICATION (needs loader support)
+        # =========================================================
+        _case(
+            name="go_emotions_roberta_base_multilabel",
+            dataset_args={
+                "dataset_name": "go_emotions",
+                "train_split": "train",
+                "test_split": "validation",
+                "text_column": "text",
+                # GoEmotions stores labels as a list under "labels"
+                "label_column": "labels",
+                "max_samples": 2000,
+                "max_length": 128,
+                "hf_model_id": "roberta-base",
+                # Still sequence classification, but your adapter must treat labels as multi-hot.
+                "hf_task": "sequence_classification",
+            },
+            config_overrides={
+                "learning_rate": 2e-5,
+            },
+        ),
+
+ 
         _case(
             name="snli_roberta_base_nli",
             dataset_args={
@@ -139,72 +164,6 @@ def run_benchmarks(db_path="outputs/federated_bench.db"):
             },
         ),
 
-        # =========================================================
-        # MULTI-LABEL CLASSIFICATION (needs loader support)
-        # =========================================================
-        _case(
-            name="go_emotions_roberta_base_multilabel",
-            dataset_args={
-                "dataset_name": "go_emotions",
-                "train_split": "train",
-                "test_split": "validation",
-                "text_column": "text",
-                # GoEmotions stores labels as a list under "labels"
-                "label_column": "labels",
-                "max_samples": 2000,
-                "max_length": 128,
-                "hf_model_id": "roberta-base",
-                # Still sequence classification, but your adapter must treat labels as multi-hot.
-                "hf_task": "sequence_classification",
-            },
-            config_overrides={
-                "learning_rate": 2e-5,
-            },
-        ),
-
-        # =========================================================
-        # LONGER CONTEXT / BIGGER MODELS (optional stress tests)
-        # =========================================================
-        _case(
-            name="imdb_longformer_base_4096_seqcls",
-            dataset_args={
-                "dataset_name": "imdb",
-                "train_split": "train",
-                "test_split": "test",
-                "text_column": "text",
-                "label_column": "label",
-                "max_samples": 600,
-                "max_length": 512,
-                "hf_model_id": "allenai/longformer-base-4096",
-                "hf_task": "sequence_classification",
-            },
-            config_overrides={
-                "learning_rate": 1e-5,
-            },
-        ),
-
-        # =========================================================
-        # MULTILINGUAL (useful for service-selection diversity)
-        # =========================================================
-        _case(
-            name="xnli_xlm_roberta_base_nli",
-            dataset_args={
-                "dataset_name": "xnli",
-                "train_split": "train",
-                "test_split": "validation",
-                "text_column": ["premise", "hypothesis"],
-                "label_column": "label",
-                "max_samples": 1200,
-                "max_length": 128,
-                "hf_model_id": "xlm-roberta-base",
-                "hf_task": "sequence_classification",
-            },
-            config_overrides={
-                "learning_rate": 2e-5,
-            },
-        ),
-
-            """
         # POS tagging via Universal Dependencies (example: English EWT treebank)
         _case(
             name="ud_ewt_bert_base_cased_pos",
@@ -478,7 +437,7 @@ def run_benchmarks(db_path="outputs/federated_bench.db"):
             "learning_rate": 5e-5,
         },
     ),
-    """
+    
         
     ]
 

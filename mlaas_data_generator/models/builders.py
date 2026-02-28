@@ -86,6 +86,11 @@ def create_model(
         batch_size = int(kwargs.get("batch_size", 16))
         device = kwargs.get("device", None)
 
+        multilabel = False
+        if isinstance(meta, dict):
+            multilabel = bool(meta.get("is_multilabel", False))
+        multilabel = bool(kwargs.get("multilabel", multilabel))
+
         return TransformersTextFineTuneAdapter(
             model_id=model_id,
             num_labels=int(num_classes),
@@ -94,6 +99,7 @@ def create_model(
             device=device,
             hf_task=hf_task,
             label_pad_value=label_pad_value,
+             multilabel=multilabel,
         )
 
     if model_choice in ("hf", "hf_text", "transformers"):

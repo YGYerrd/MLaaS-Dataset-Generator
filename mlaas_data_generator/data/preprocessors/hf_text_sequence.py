@@ -1,5 +1,58 @@
 import numpy as np
 
+def _is_multilabel_sample(value):
+    return isinstance(value, (list, tuple, set, np.ndarray))
+
+
+def _encode_multilabel_targets(train_labels, test_labels, label_feat):
+    try:
+        from datasets import ClassLabel, Sequence
+    except Exception:
+        ClassLabel = None
+        Sequence = None
+
+    num_classes = None
+    label_mapping = None
+
+    if (
+        ClassLabel is not None
+        and Sequence is not None
+        and isinstance(label_feat, Sequence)
+        and isinstance(getattr(label_feat, "feature", None), ClassLabel)
+    ):
+        class_label = label_feat.feature
+        num_classes = int(class_label.num_classes)
+        if getattr(class_label, "names", None):
+            label_mapping = {str(name): int(i) for i, name in enumerate(class_label.names)}
+
+    if num_classes is None:
+        max_label = -1
+        for ys in (train_labels, test_labels):
+            for row in ys:
+                for idx in row:
+                    max_label = max(max_label, int(idx))
+        num_classes = max_label + 1
+
+    if num_classes <= 0:
+        raise ValueError("Could not infer num_classes for multi-label targets")
+
+    def to_multi_hot(rows):
+        out = np.zeros((len(rows), num_classes), dtype="float32")
+        for i, row in enumerate(rows):
+            for idx in row:
+                j = int(idx)
+                if j < 0 or j >= num_classes:
+                    raise ValueError(f"Label index out of range for multi-label target: {j}")
+                out[i, j] = 1.0
+        return out
+
+    y_train = to_multi_hot(train_labels)
+    y_test = to_multi_hot(test_labels)
+
+    if label_mapping is None:
+        label_mapping = {str(i): i for i in range(num_classes)}
+
+    return y_train, y_test, num_classes, label_mapping
 
 def preprocess_hf_text_sequence(
     train,
@@ -48,15 +101,28 @@ def preprocess_hf_text_sequence(
         ClassLabel = None
 
     label_feat = ds_train.features.get(label_column)
-    if ClassLabel is not None and isinstance(label_feat, ClassLabel):
+
+    train_labels = list(ds_train[label_column])
+    test_labels = list(ds_test[label_column])
+
+    first_non_null = next((v for v in train_labels if v is not None), None)
+    is_multilabel = _is_multilabel_sample(first_non_null)
+
+    if is_multilabel:
+        y_train, y_test, num_classes, label_mapping = _encode_multilabel_targets(
+            train_labels,
+            test_labels,
+            label_feat,
+        )
+    elif ClassLabel is not None and isinstance(label_feat, ClassLabel):
         num_classes = int(label_feat.num_classes)
-        y_train = np.asarray(ds_train[label_column], dtype="int32")
-        y_test = np.asarray(ds_test[label_column], dtype="int32")
+        y_train = np.asarray(train_labels, dtype="int32")
+        y_test = np.asarray(test_labels, dtype="int32")
         label_mapping = {str(i): i for i in range(num_classes)}
     else:
         uniq = {}
         y_train_list = []
-        for v in ds_train[label_column]:
+        for v in train_labels:
             if v not in uniq:
                 uniq[v] = len(uniq)
             y_train_list.append(uniq[v])
@@ -157,6 +223,8 @@ def preprocess_hf_text_sequence(
         "x_keys": x_keys,
         "label_granularity": "sequence",
         "hf_task": "sequence_classification",
+        "is_multilabel": bool(is_multilabel),
+        "classification_type": "multilabel" if is_multilabel else "single_label",
         "modality": "text",
     })
 

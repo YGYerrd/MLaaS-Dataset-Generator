@@ -19,11 +19,12 @@ class TransformersTextFineTuneAdapter:
         device=None,
         hf_task="sequence_classification",
         label_pad_value=-100,
+        multilabel=False,
     ):
         if hf_task == "token_classification":
             spec = TokenClassificationSpec()
         else:
-            spec = SequenceClassificationSpec()
+            spec = SequenceClassificationSpec(multilabel=multilabel)
 
         self.core = HFCore(
             model_id=model_id,

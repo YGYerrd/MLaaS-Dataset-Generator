@@ -258,11 +258,7 @@ class HFCore:
             secondary = np.nan
             loss_mean = np.nan
         else:
-            # Token task should keep (N,L) and mask inside metrics
-            if getattr(self.task_spec, "name", None) == "token_classification":
-                m = self.task_spec.metrics(y_true_np, y_pred_np, y_extra=extra)
-            else:
-                m = self.task_spec.metrics(y_true_np.reshape(-1), y_pred_np.reshape(-1))
+            m = self.task_spec.metrics(y_true_np, y_pred_np, y_extra=extra)
 
             primary = float(m.get("primary", np.nan))
             secondary = float(m.get("secondary", np.nan))
